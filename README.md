@@ -63,6 +63,10 @@ References: <br />
   * `training_image_data` folder with the training slides.
   * `testing_image_data` folder with the testing slides.
   * `training_ground_truth.csv` file containing the tumor & molecular scores for each slide.
+  * `mitoses` folder with the following from the mitosis detection auxiliary dataset:
+    * `mitoses_test_image_data` folder with the folders of testing images
+    * `mitoses_train_image_data` folder with the folders of training images
+    * `mitoses_train_ground_truth` folder with the folders of training csv files
 * Layout:
   ```
   - MachineLearning-Keras-ResNet50.ipynb
@@ -71,15 +75,42 @@ References: <br />
     - visualization.py
   - ...
   - data/
+    - mitoses
+      - mitoses_test_image_data
+        - 01
+          - 01.tif
+        - 02
+          - 01.tif
+        ...
+      - mitoses_train_ground_truth
+        - 01
+          - 01.csv
+          - 02.csv
+          ...
+        - 02
+          - 01.csv
+          - 02.csv
+          ...
+        ...
+      - mitoses_train_image_data
+        - 01
+          - 01.tif
+          - 02.tif
+          ...
+        - 02
+          - 01.tif
+          - 02.tif
+          ...
+        ...
     - training_ground_truth.csv
     - training_image_data
-        - TUPAC-TR-001.svs
-        - TUPAC-TR-002.svs
-        - ...
+      - TUPAC-TR-001.svs
+      - TUPAC-TR-002.svs
+      - ...
     - testing_image_data
-        - TUPAC-TE-001.svs
-        - TUPAC-TE-002.svs
-        - ...
+      - TUPAC-TE-001.svs
+      - TUPAC-TE-002.svs
+      - ...
   - preprocess.py
   - preprocess_mitoses.py
   - train_mitoses.py
