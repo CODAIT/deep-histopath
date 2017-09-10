@@ -178,7 +178,8 @@ def train(train_path, val_path, exp_path, patch_size, batch_size, clf_epochs, fi
     clf_lr: Float learning rate for training the new classifier layers.
     finetune_lr: Float learning rate for fine-tuning the model.
     finetune_layers: Integer number of layers at the end of the
-      pretrained portion of the model to fine-tune.
+      pretrained portion of the model to fine-tune.  The new classifier
+      layers will still be trained during fine-tuning as well.
     l2: Float L2 global regularization value.
     log_interval: Integer number of steps between logging during
       training.
@@ -446,17 +447,18 @@ if __name__ == "__main__":
   parser.add_argument("--batch_size", type=int, default=32,
       help="batch size (default: %(default)s)")
   parser.add_argument("--clf_epochs", type=int, default=1,
-      help="number of epochs for which to training the new classifier layers "\
+      help="number of epochs for which to train the new classifier layers "\
            "(default: %(default)s)")
   parser.add_argument("--finetune_epochs", type=int, default=0,
-      help="number of epochs for which to fine-tune the model (default: %(default)s)")
+      help="number of epochs for which to fine-tune the unfrozen layers (default: %(default)s)")
   parser.add_argument("--clf_lr", type=float, default=1e-5,
       help="learning rate for training the new classifier layers (default: %(default)s)")
   parser.add_argument("--finetune_lr", type=float, default=1e-7,
-      help="learning rate for fine-tuning the model (default: %(default)s)")
+      help="learning rate for fine-tuning the unfrozen layers (default: %(default)s)")
   parser.add_argument("--finetune_layers", type=int, default=0,
       help="number of layers at the end of the pretrained portion of the model to fine-tune "\
-           "(default: %(default)s)")
+          "(note: the new classifier layers will still be trained during fine-tuning as well) "\
+          "(default: %(default)s)")
   parser.add_argument("--l2", type=float, default=0.01,
       help="amount of l2 weight regularization (default: %(default)s)")
   parser.add_argument("--log_interval", type=int, default=100,
@@ -485,10 +487,14 @@ if __name__ == "__main__":
                     f"clf_lr_{args.clf_lr}_finetune_lr_{args.finetune_lr}_l2_{args.l2}"
   exp_path = os.path.join(args.exp_parent_path, args.exp_name)
 
-  # make experiment folder (TODO: fail if it already exists)
+  # make experiment folder
   if not os.path.exists(exp_path):
-    os.makedirs(exp_path)  #, exist_ok=True)
+    os.makedirs(exp_path)
   print("experiment directory: {}".format(exp_path))
+
+  # save args to file in experiment folder
+  with open(os.path.join(exp_path, 'args.txt'), 'w') as f:
+    f.write(str(args))
 
   # train!
   train(train_path, val_path, exp_path, args.patch_size, args.batch_size,

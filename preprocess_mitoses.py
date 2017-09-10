@@ -125,43 +125,41 @@ def create_mask(h, w, coords, size):
   return mask
 
 
-def gen_normal_coords(mask, size, threshold, num_tries=10000):
+def gen_normal_coords(mask, size, p, threshold, overlap):
   """Generate (row, col) coordinates for normal patches.
 
-  This generates coordinates for normal patches that may overlap with
-  mitosis patches up to `threshold` percentage.
+  This samples with probability `p` coordinates for normal patches that
+  may overlap with mitosis patches up to `threshold` percentage, and
+  that overlap with each other by `overlap` pixels.
 
   Args:
     mask: A binary mask, indicating where the mitosis patches are
       located, of the same height and width as the region image.
     size: An integer size of the square patch to extract.
-    threshold = A decimal inclusive upper bound on the percentage of
-      overlap.
-    num_tries = Integer upper bound on sampling to prevent an infinite
-      loop.
+    p: A decimal probability of sampling each normal patch.
+    threshold: A decimal inclusive upper bound on the percentage of
+      allowable overlap with mitosis patches.
+    overlap: An integer number of pixels of overlap for normal patches.
 
   Returns:
-    (row, col) coordinates of a normal patch.
+    Yields (row, col) coordinates of a normal patch.
   """
   # check that size is within the mask bounds
   assert np.ndim(mask) == 2, "mask must be of shape (h, w)"
   h, w = mask.shape
-  assert 1 < size <= min(h, w), "size must be >1 and within the bounds of the image"
+  assert 1 < size <= min(h, w), "size must be > 1 and within the bounds of the image"
+  assert 0 <= p <= 1, "p must be a valid decimal probability"
   assert 0 <= threshold <= 1, "threshold must be a valid decimal percentage"
+  assert 0 <= overlap <= size, "overlap must be an integer >= 0 and <= patch size"
 
-  #while True:
-  for _ in range(num_tries):  # upper bound on sampling to prevent infinite loop
-    # uniformly sample (row, col) coordinates from the image
-    row = np.random.randint(0, h)
-    col = np.random.randint(0, w)
-
-    # return (row, col) if the overlap with mitosis patches is <= threshold
-    mask_patch = np.squeeze(extract_patch(np.atleast_3d(mask), row, col, size))
-    if np.mean(mask_patch) <= threshold:
-      return row, col
-
-  else:  # raise error if no normal patches found
-    raise AssertionError("no normal patches found after {} tries".format(num_tries))
+  for row in range(0, h-size, size-overlap):
+    for col in range(0, w-size, size-overlap):
+      # extract patch from mask to check for overlap with mitosis patch
+      mask_patch = np.squeeze(extract_patch(np.atleast_3d(mask), row, col, size))
+      if np.mean(mask_patch) <= threshold:
+        # sample from a Bernoulli distribution with probability `p`
+        if np.random.binomial(1, p):
+          yield row, col
 
 
 def save_patch(patch, path, lab, case, region, row, col, suffix="", ext="jpg"):
@@ -190,17 +188,22 @@ def save_patch(patch, path, lab, case, region, row, col, suffix="", ext="jpg"):
 
 
 def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
-    num_rand_translations, max_shift, num_normal, overlap_threshold, seed=None):
+    num_rand_translations_train, num_rand_translations_val, max_shift, p_normal_train, p_normal_val,
+    overlap_threshold, overlap_normal_train, overlap_normal_val, seed=None):
   """Generate a mitosis detection patch dataset.
 
   This generates train/val datasets of mitosis/normal image patches for
   the mitosis detection problem.  The mitosis patches will be extracted
   with centers at the given coordinates, along with random translations
   from those coordinates.  Normal patches will be extracted from areas
-  outside of the mitosis patches, except for some small overlaps.  To
-  support adversarial training, the generated patch filenames will each
-  contain information about the laboratory and case from which the
-  patch originated.
+  outside of the mitosis patches, with some small allowable percentage
+  of overlap.  Normal patches may also overlap with each other.  The
+  train/val split will be performed on overall cases, stratified by lab.
+  I.e., the cases from each lab will be separately split into training
+  and validation sets, and then the associated sets will be combined at
+  the end.  In order to support adversarial training, the generated
+  patch filenames will each contain information about the laboratory
+  and case from which the patch originated.
 
   Args:
     images_path: Path to folder that contains the mitosis training
@@ -212,15 +215,24 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
     train_size: Decimal percentage of data to include in the training
       set during the train/val split.
     patch_size: An integer size of the square patch to extract.
-    num_rand_translations: Integer number of random translation
-      augmented patches to extract for each mitosis, in addition to the
-      centered mitosis patch.
+    num_rand_translations_train: Integer number of random translation
+      augmented patches to extract for each mitosis in the training set,
+      in addition to the centered mitosis patch.
+    num_rand_translations_val: Integer number of random translation
+      augmented patches to extract for each mitosis in the validation
+      set, in addition to the centered mitosis patch.
     max_shift: Integer upper bound on the spatial shift range for the
       random translations.
-    num_normal: Integer number of normal patches to extract for each
-      mitosis.
+    p_normal_train: A decimal probability of sampling each normal patch
+      in the training set.
+    p_normal_val: A decimal probability of sampling each normal patch
+      in the validation set.
     overlap_threshold: Decimal inclusive upper bound on the percentage
       of overlap of normal patches with mitosis patches.
+    overlap_normal_train: An integer number of pixels of overlap for
+      normal patches in the training set.
+    overlap_normal_val: An integer number of pixels of overlap for
+      normal patches in the validation set.
     seed: Integer random seed for NumPy.
   """
   # set numpy seed
@@ -234,27 +246,33 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
 
   # generate & save patches
   for lab in range(1, 4):  # 3 labs
+    # split cases into train/val sets
     lab_cases = labs.get(lab)
     train, val = train_test_split(lab_cases, train_size=train_size, test_size=1-train_size,
         random_state=seed)
-    for stage, cases in [('train', train), ('val', val)]:
+    train_args = ('train', train, num_rand_translations_train, p_normal_train, overlap_normal_train)
+    val_args = ('val', val, num_rand_translations_val, p_normal_val, overlap_normal_val)
+    for split_args in [train_args, val_args]:
+      # generate samples for this split
+      split_name, cases, num_rand_translations, p_normal, overlap_normal = split_args
       for case in cases:
         case = "{:02d}".format(case)  # reformat case to zero-padded 2-character number
         case_path = os.path.join(images_path, case)
         region_ims = os.listdir(case_path)  # get regions
-        for region_im in region_ims:
+        for region_im in region_ims:  # a single case may have many available regions
           region, ext = region_im.split('.')  # region number, image file extension
           region_im_path = os.path.join(case_path, region_im)
           im = np.array(Image.open(region_im_path))  # get region image
           h, w, c = im.shape
           coords_path = os.path.join(labels_path, case, "{}.csv".format(region))
-          if os.path.isfile(coords_path):  # a missing file indicates no mitoses
+          if os.path.isfile(coords_path):
             coords = np.loadtxt(coords_path, dtype=np.int64, delimiter=',', ndmin=2)
-          else:
+          else:  # a missing file indicates no mitoses
             coords = []  # no mitoses
 
           # mitosis samples:
-          save_path = os.path.join(base_save_path, stage, "mitosis")
+          # save the centered patch and random translations thereof
+          save_path = os.path.join(base_save_path, split_name, "mitosis")
           if not os.path.exists(save_path):
             os.makedirs(save_path)  # create if necessary
           for row, col in coords:
@@ -269,12 +287,15 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
                   "shifted-from-{}-{}".format(row, col))
 
           # normal samples:
-          save_path = os.path.join(base_save_path, stage, "normal")
+          # sample from all possible normal patches
+          save_path = os.path.join(base_save_path, split_name, "normal")
           if not os.path.exists(save_path):
             os.makedirs(save_path)  # create if necessary
           mask = create_mask(h, w, coords, patch_size)
-          for i in range(num_normal):
-            row, col = gen_normal_coords(mask, patch_size, overlap_threshold)
+          # this generator yields patches sampled from all possible normal patches
+          generator = gen_normal_coords(mask, patch_size, p_normal, overlap_threshold,
+              overlap_normal)
+          for row, col in generator:
             patch = extract_patch(im, row, col, patch_size)
             save_patch(patch, save_path, lab, case, region, row, col)
 
@@ -309,17 +330,29 @@ if __name__ == "__main__":
            "(default: %(default)s)")
   parser.add_argument("--patch_size", type=int, default=64,
       help="integer length of the square patches to extract (default: %(default)s)")
-  parser.add_argument("--num_rand_translations", type=int, default=10,
-      help="number of random translation augmented patches to extract for each mitosis, in "\
-           "addition to the centered mitosis patch (default: %(default)s)")
+  parser.add_argument("--num_rand_translations_train", type=int, default=10,
+      help="number of random translation augmented patches to extract for each mitosis in the "\
+           "training set, in addition to the centered mitosis patch (default: %(default)s)")
+  parser.add_argument("--num_rand_translations_val", type=int, default=10,
+      help="number of random translation augmented patches to extract for each mitosis in the "\
+           "validation set, in addition to the centered mitosis patch (default: %(default)s)")
   parser.add_argument("--max_shift", type=int,
       help="upper bound on the spatial shift range for the random translations "\
            "(default: `int(patch_size/4)`)")
-  parser.add_argument("--num_normal", type=int, help="number of normal patches to extract from "\
-      "each region (default: `num_rand_translations+1`)")
+  parser.add_argument("--p_normal_train", type=lambda x: check_float_range(x, 0, 1), default=1,
+      help="probability of sampling each normal patch in the training set (default: %(default)s)")
+  parser.add_argument("--p_normal_val", type=lambda x: check_float_range(x, 0, 1), default=1,
+      help="probability of sampling each normal patch in the validation set (default: %(default)s)")
+  # TODO: better names for the following three args
   parser.add_argument("--overlap_threshold", type=lambda x: check_float_range(x, 0, 1),
       default=0.25, help="decimal inclusive upper bound on the percentage of overlap of normal "\
                          "patches with mitosis patches (default: %(default)s)")
+  parser.add_argument("--overlap_normal_train", type=int, default=0,
+      help="An integer number of pixels of overlap for normal patches in the training set "\
+           "(default: %(default)s)")
+  parser.add_argument("--overlap_normal_val", type=int, default=0,
+      help="An integer number of pixels of overlap for normal patches in the validation set "\
+           "(default: %(default)s)")
   parser.add_argument("--seed", type=int, help="random seed for numpy (default: %(default)s)")
   args = parser.parse_args()
 
@@ -328,11 +361,18 @@ if __name__ == "__main__":
   labels_path = os.path.join(args.base_path, args.labels_folder)
   base_save_path = os.path.join(args.base_path, args.save_folder)
   max_shift = args.max_shift if args.max_shift is not None else int(args.patch_size/4)
-  num_normal = args.num_normal if args.num_normal is not None else args.num_rand_translations + 1
+
+  # save args to file in base save folder
+  if not os.path.exists(base_save_path):
+    os.makedirs(base_save_path)
+  with open(os.path.join(base_save_path, 'args.txt'), 'w') as f:
+    f.write(str(args))
 
   # preprocess!
   preprocess(images_path, labels_path, base_save_path, args.train_size, args.patch_size,
-      args.num_rand_translations, max_shift, num_normal, args.overlap_threshold, args.seed)
+      args.num_rand_translations_train, args.num_rand_translations_val, max_shift,
+      args.p_normal_train, args.p_normal_val, args.overlap_threshold, args.overlap_normal_train,
+      args.overlap_normal_val, args.seed)
 
 
 # ---
@@ -500,42 +540,73 @@ def test_extract_patch():
 
 
 def test_gen_normal_coords():
+  import types
   import pytest
   # create mask
   h, w = 100, 200
   size = 32
+  p = 0.6
   threshold = 0.25
+  overlap = 0
   mask = np.zeros((h, w), dtype=bool)
   mask[0:size, 0:size] = True
 
+  # check that it returns a generator object
+  assert isinstance(gen_normal_coords(mask, size, p, threshold, overlap), types.GeneratorType)
+
   # mask shape error
   with pytest.raises(AssertionError):
-    gen_normal_coords(np.zeros((h, w, 3)), size, threshold)
+    next(gen_normal_coords(np.zeros((h, w, 3)), size, p, threshold, overlap))
 
   # size error
   with pytest.raises(AssertionError):
-    gen_normal_coords(mask, h+2, threshold)
+    next(gen_normal_coords(mask, h+2, p, threshold, overlap))
 
   # another size error
   with pytest.raises(AssertionError):
-    gen_normal_coords(mask, 1, threshold)
+    next(gen_normal_coords(mask, 1, p, threshold, overlap))
+
+  # probability error
+  with pytest.raises(AssertionError):
+    next(gen_normal_coords(mask, size, -1, threshold, overlap))
+
+  # another probability error
+  with pytest.raises(AssertionError):
+    next(gen_normal_coords(mask, size, 2, threshold, overlap))
 
   # threshold error
   with pytest.raises(AssertionError):
-    gen_normal_coords(mask, size, -1)
+    next(gen_normal_coords(mask, size, p, -1, overlap))
 
   # another threshold error
   with pytest.raises(AssertionError):
-    gen_normal_coords(mask, size, 2)
+    next(gen_normal_coords(mask, size, p, 2, overlap))
 
-  # check for failure if no normal patches can be found
+  # overlap error
   with pytest.raises(AssertionError):
-    gen_normal_coords(np.ones((100, 100)), 100, 0)
+    next(gen_normal_coords(mask, size, -1, threshold, -1))
+
+  # another overlap error
+  with pytest.raises(AssertionError):
+    next(gen_normal_coords(mask, size, -1, threshold, size+1))
 
   # normal
-  row, col = gen_normal_coords(mask, size, threshold)
+  row, col = next(gen_normal_coords(mask, size, p, threshold, overlap))
   assert 0 <= row <= h
   assert 0 <= col <= w
+
+  # list of coords
+  coords = list(gen_normal_coords(mask, size, p, threshold, overlap))
+  assert len(coords) > 0
+
+  # check for situations in which no normal patches should be generated
+  # - too much mitosis overlap
+  coords = list(gen_normal_coords(np.ones((100, 100)), 100, p, 0, overlap))
+  assert len(coords) == 0
+
+  # - sample probability is 0
+  coords = list(gen_normal_coords(mask, size, 0, threshold, overlap))
+  assert len(coords) == 0
 
 
 def test_gen_random_translation():
