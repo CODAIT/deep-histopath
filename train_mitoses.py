@@ -3,6 +3,7 @@ import argparse
 from datetime import datetime
 import os
 import pickle
+import shutil
 
 import keras
 from keras import backend as K
@@ -495,6 +496,9 @@ if __name__ == "__main__":
   # save args to file in experiment folder
   with open(os.path.join(exp_path, 'args.txt'), 'w') as f:
     f.write(str(args))
+
+  # copy this script to the base save folder
+  shutil.copy2(os.path.realpath(__file__), base_save_path)
 
   # train!
   train(train_path, val_path, exp_path, args.patch_size, args.batch_size,

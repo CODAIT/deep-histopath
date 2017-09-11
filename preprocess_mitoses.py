@@ -1,5 +1,6 @@
 """Preprocessing - mitosis detection"""
 import argparse
+import math
 import os
 import shutil
 
@@ -187,8 +188,8 @@ def save_patch(patch, path, lab, case, region, row, col, suffix="", ext="jpg"):
   Image.fromarray(patch).save(file_path)
 
 
-def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
-    num_rand_translations_train, num_rand_translations_val, max_shift, p_normal_train, p_normal_val,
+def preprocess(images_path, labels_path, base_save_path, train_size, patch_size, translations_train,
+    translations_val, rotations_train, rotations_val, max_shift, p_normal_train, p_normal_val,
     overlap_threshold, overlap_normal_train, overlap_normal_val, seed=None):
   """Generate a mitosis detection patch dataset.
 
@@ -215,12 +216,18 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
     train_size: Decimal percentage of data to include in the training
       set during the train/val split.
     patch_size: An integer size of the square patch to extract.
-    num_rand_translations_train: Integer number of random translation
-      augmented patches to extract for each mitosis in the training set,
-      in addition to the centered mitosis patch.
-    num_rand_translations_val: Integer number of random translation
-      augmented patches to extract for each mitosis in the validation
-      set, in addition to the centered mitosis patch.
+    translations_train: Integer number of random translation augmented
+      patches to extract for each mitosis in the training set, in
+      addition to the centered mitosis patch.
+    translations_val: Integer number of random translation augmented
+      patches to extract for each mitosis in the validation set, in
+      addition to the centered mitosis patch.
+    rotations_train: Integer number of evenly-spaced rotation augmented
+      patches to extract for each mitosis in the training set, in
+      addition to the centered mitosis patch.
+    rotations_val: Integer number of evenly-spaced rotation augmented
+      patches to extract for each mitosis in the validation set, in
+      addition to the centered mitosis patch.
     max_shift: Integer upper bound on the spatial shift range for the
       random translations.
     p_normal_train: A decimal probability of sampling each normal patch
@@ -235,6 +242,8 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
       normal patches in the validation set.
     seed: Integer random seed for NumPy.
   """
+  # TODO: break this up into more functions
+
   # set numpy seed
   np.random.seed(seed)
 
@@ -250,11 +259,12 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
     lab_cases = labs.get(lab)
     train, val = train_test_split(lab_cases, train_size=train_size, test_size=1-train_size,
         random_state=seed)
-    train_args = ('train', train, num_rand_translations_train, p_normal_train, overlap_normal_train)
-    val_args = ('val', val, num_rand_translations_val, p_normal_val, overlap_normal_val)
+    train_args = ('train', train, translations_train, rotations_train, p_normal_train,
+        overlap_normal_train)
+    val_args = ('val', val, translations_val, rotations_val, p_normal_val, overlap_normal_val)
     for split_args in [train_args, val_args]:
       # generate samples for this split
-      split_name, cases, num_rand_translations, p_normal, overlap_normal = split_args
+      split_name, cases, translations, rotations, p_normal, overlap_normal = split_args
       for case in cases:
         case = "{:02d}".format(case)  # reformat case to zero-padded 2-character number
         case_path = os.path.join(images_path, case)
@@ -271,7 +281,7 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
             coords = []  # no mitoses
 
           # mitosis samples:
-          # save the centered patch and random translations thereof
+          # save a centered patch, as well as rotations and random translations thereof
           save_path = os.path.join(base_save_path, split_name, "mitosis")
           if not os.path.exists(save_path):
             os.makedirs(save_path)  # create if necessary
@@ -279,8 +289,36 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
             # centered mitosis patch
             patch = extract_patch(im, row, col, patch_size)
             save_patch(patch, save_path, lab, case, region, row, col)
+
+            # mitosis evenly-spaced rotations
+            # We want to extract a rotated image, but if we simply extract a patch and rotate it,
+            # the corners will be empty.  Ideally, we don't want to have empty corners, or have
+            # to fill those corners in with random noise, mirroring, etc.  Since we have access
+            # to the full image, we can first extract a larger patch from which a regular patch
+            # size can be extracted after a rotation without including any empty regions.
+            # If we rotate a patch by theta degrees, then the corners of a centered square patch
+            # will intersect with the sides of the rotated larger patch at the same angle theta,
+            # forming a right triangle between the side of the centered patch as the hypotenuse,
+            # the segment of the side of the rotated patch between the corner and the intersection
+            # with the centered patch, the corner of the rotated patch, and the segment on the
+            # next side, which is the complement of the first segment lengthwise. Since we know
+            # the angle and the length of the centered patch, we can compute the lengths of the
+            # two segments, and thus the length of the side of the outer patch.  A 45 degree
+            # rotation is the worst case scenario, so we extract a bounding patch for that case.
+            # Instead of random rotations, we extract evenly-spaced rotations in the range [0, 180],
+            # skipping the 0 angle.
+            rads = math.pi / 4  # 45 degrees, which is worst case
+            bounding_size = math.ceil(patch_size * (math.cos(rads) + math.sin(rads)))
+            bounding_patch = extract_patch(im, row, col, bounding_size)
+            center = round(bounding_size / 2)
+            if rotations > 0:
+              for theta in np.linspace(180/rotations, 180, rotations, dtype=int):
+                rotated_patch = Image.fromarray(bounding_patch).rotate(theta, Image.BILINEAR)
+                patch = extract_patch(np.asarray(rotated_patch), center, center, patch_size)
+                save_patch(patch, save_path, lab, case, region, row, col, "rot-{}".format(theta))
+
             # mitosis random translations
-            for i in range(num_rand_translations):
+            for i in range(translations):
               row_shifted, col_shifted = gen_random_translation(im, row, col, max_shift)
               patch = extract_patch(im, row_shifted, col_shifted, patch_size)
               save_patch(patch, save_path, lab, case, region, row_shifted, col_shifted,
@@ -314,27 +352,30 @@ if __name__ == "__main__":
 
   # parse args
   parser = argparse.ArgumentParser()
-  parser.add_argument("--base_path", default=os.path.join("data", "mitoses"),
-      help="base path for mitosis datasets (default: %(default)s)")
-  parser.add_argument("--images_folder", default="mitoses_train_image_data",
-      help="folder within `base_path` that contains the mitosis training images "\
-           "(default: %(default)s)")
-  parser.add_argument("--labels_folder", default="mitoses_train_ground_truth",
-      help="folder within `base_path` that contains the mitosis training labels "\
-           "(default: %(default)s)")
-  parser.add_argument("--save_folder", default="patches",
-      help="folder within `base_path` in which to write the folders of output patches "\
-           "(default: %(default)s)")
+  parser.add_argument("--images_path",
+      default=os.path.join("data", "mitoses", "mitoses_train_image_data"),
+      help="path to the mitosis training images (default: %(default)s)")
+  parser.add_argument("--labels_path",
+      default=os.path.join("data", "mitoses", "mitoses_train_ground_truth"),
+      help="path to the mitosis training labels (default: %(default)s)")
+  parser.add_argument("--save_path", default=os.path.join("data", "mitoses", "patches"),
+      help="path to folder in which to write the folders of output patches (default: %(default)s)")
   parser.add_argument("--train_size", type=lambda x: check_float_range(x, 0, 1), default=0.8,
       help="decimal percentage of data to include in the training set during the train/val split "\
            "(default: %(default)s)")
   parser.add_argument("--patch_size", type=int, default=64,
       help="integer length of the square patches to extract (default: %(default)s)")
-  parser.add_argument("--num_rand_translations_train", type=int, default=10,
+  parser.add_argument("--translations_train", type=int, default=10,
       help="number of random translation augmented patches to extract for each mitosis in the "\
            "training set, in addition to the centered mitosis patch (default: %(default)s)")
-  parser.add_argument("--num_rand_translations_val", type=int, default=10,
+  parser.add_argument("--translations_val", type=int, default=10,
       help="number of random translation augmented patches to extract for each mitosis in the "\
+           "validation set, in addition to the centered mitosis patch (default: %(default)s)")
+  parser.add_argument("--rotations_train", type=int, default=10,
+      help="number of evenly-spaced rotation augmented patches to extract for each mitosis in the "\
+           "training set, in addition to the centered mitosis patch (default: %(default)s)")
+  parser.add_argument("--rotations_val", type=int, default=10,
+      help="number of evenly-spaced rotation augmented patches to extract for each mitosis in the "\
            "validation set, in addition to the centered mitosis patch (default: %(default)s)")
   parser.add_argument("--max_shift", type=int,
       help="upper bound on the spatial shift range for the random translations "\
@@ -357,22 +398,22 @@ if __name__ == "__main__":
   args = parser.parse_args()
 
   # set any other defaults
-  images_path = os.path.join(args.base_path, args.images_folder)
-  labels_path = os.path.join(args.base_path, args.labels_folder)
-  base_save_path = os.path.join(args.base_path, args.save_folder)
   max_shift = args.max_shift if args.max_shift is not None else int(args.patch_size/4)
 
-  # save args to file in base save folder
-  if not os.path.exists(base_save_path):
-    os.makedirs(base_save_path)
-  with open(os.path.join(base_save_path, 'args.txt'), 'w') as f:
+  # save args to file in save folder
+  if not os.path.exists(args.save_path):
+    os.makedirs(args.save_path)
+  with open(os.path.join(args.save_path, 'args.txt'), 'w') as f:
     f.write(str(args))
 
+  # copy this script to the base save folder
+  shutil.copy2(os.path.realpath(__file__), args.save_path)
+
   # preprocess!
-  preprocess(images_path, labels_path, base_save_path, args.train_size, args.patch_size,
-      args.num_rand_translations_train, args.num_rand_translations_val, max_shift,
-      args.p_normal_train, args.p_normal_val, args.overlap_threshold, args.overlap_normal_train,
-      args.overlap_normal_val, args.seed)
+  preprocess(args.images_path, args.labels_path, args.save_path, args.train_size, args.patch_size,
+      args.translations_train, args.translations_val, args.rotations_train, args.rotations_val,
+      max_shift, args.p_normal_train, args.p_normal_val, args.overlap_threshold,
+      args.overlap_normal_train, args.overlap_normal_val, args.seed)
 
 
 # ---
