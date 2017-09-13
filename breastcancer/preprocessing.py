@@ -32,6 +32,7 @@ import os
 
 import numpy as np
 import openslide
+from PIL import Image
 from openslide import OpenSlideError
 from openslide.deepzoom import DeepZoomGenerator
 import pandas as pd
@@ -465,7 +466,7 @@ def normalize_staining(sample_tuple, beta=0.15, alpha=1, light_intensity=255):
   return (slide_num, x_norm)
 
 
-def flatten_sample(sample_tuple):
+def flatten_sample_tuple(sample_tuple):
   """
   Flatten a (H,W,C) sample into a (C*H*W) row vector.
 
@@ -487,6 +488,26 @@ def flatten_sample(sample_tuple):
   # 2. Flatten sample into (ch*sample_size_x*sample_size_y).
   flattened_sample = sample.transpose(2,0,1).reshape(-1)
   return (slide_num, flattened_sample)
+
+def flatten_sample(sample):
+  """
+    Flatten a (H,W,C) sample into a (C*H*W) row vector.
+
+    Transpose each sample from (H, W, channels) to (channels, H, W), then
+    flatten each into a vector of length channels*H*W.
+
+    Args:
+      sample: A sample, where slide_num is an
+        integer, and sample is a 3D NumPy array of shape (H,W,C).
+
+    Returns:
+      A sample, where the sample has been transposed
+      from (H,W,C) to (C,H,W), and flattened to a vector of length
+      (C*H*W).
+    """
+  flattened_sample = sample.transpose(2, 0, 1).reshape(-1)
+  return flattened_sample
+
 
 
 # Get Ground Truth Labels
@@ -511,7 +532,7 @@ def get_labels_df(folder, filename="training_ground_truth.csv"):
   return labels_df
 
 
-# Process All Slides Into A Spark DataFrame
+# Process All Slides Into A Spark RDD
 
 def preprocess(spark, slide_nums, folder="data", training=True, tile_size=1024, overlap=0,
                tissue_threshold=0.9, sample_size=256, grayscale=False, normalize_stains=True,
@@ -549,8 +570,9 @@ def preprocess(spark, slide_nums, folder="data", training=True, tile_size=1024, 
     num_partitions: Number of partitions to use during processing.
 
   Returns:
-    A Spark DataFrame in which each row contains the slide number, tumor
-    score, molecular score, and the sample stretched out into a Vector.
+    A Spark RDD in which, for training data sets, each element contains the slide number, tumor
+    score, molecular score, and the sample as a numpy array; for validation data set,
+    each element contains the slide number and the sample as a numpy array
   """
   # Filter out broken slides
   # Note: "Broken" here is due to a "version of OpenJPEG with broken support for chroma-subsampled
@@ -581,7 +603,6 @@ def preprocess(spark, slide_nums, folder="data", training=True, tile_size=1024, 
   samples = filtered_tiles.flatMap(lambda tile: process_tile(tile, sample_size, grayscale))
   if normalize_stains:
     samples = samples.map(lambda sample: normalize_staining(sample))
-  samples = samples.map(lambda sample: flatten_sample(sample))
 
   # Convert to a DataFrame
   if training:
@@ -589,19 +610,15 @@ def preprocess(spark, slide_nums, folder="data", training=True, tile_size=1024, 
     labels_df = get_labels_df(folder)
     samples_with_labels = (samples.map(
         lambda tup: (int(tup[0]), int(labels_df.at[tup[0],"tumor_score"]),
-                     float(labels_df.at[tup[0],"molecular_score"]), Vectors.dense(tup[1]))))
-    df = samples_with_labels.toDF(["slide_num", "tumor_score", "molecular_score", "sample"])
-    df = df.select(df.slide_num.astype("int"), df.tumor_score.astype("int"),
-                   df.molecular_score, df["sample"])
+                     float(labels_df.at[tup[0],"molecular_score"]), tup[1])))
+    return samples_with_labels
   else:  # testing data -- no labels
-    df = samples.toDF(["slide_num", "sample"])
-    df = df.select(df.slide_num.astype("int"), df["sample"])
-  return df
+    return samples
 
 
 # Save DataFrame
 
-def save(df, filepath, sample_size, grayscale, mode="error", format="parquet", file_size=128):
+def save_df(df, filepath, sample_size, grayscale, mode="error", format="parquet", file_size=128):
   """
   Save a preprocessed DataFrame with a constraint on the file sizes.
 
@@ -674,4 +691,108 @@ def sample(df, frac, training=True, seed=None):
   """
   df_sample = df.sampleBy("tumor_score", fractions={1: frac, 2: frac, 3: frac}, seed=seed)
   return df_sample
+
+
+def rdd_2_df(rdd, training=True):
+  """
+  Convert the sample RDD to a Spark DataFrame.
+
+  Args:
+    rdd: A sample RDD with or without labels; for the RDD with labels,
+      each element will be (slide_num, tumor_score, molecular_score,
+      sample); for the RDD witout labels, each element will be (slide_num,
+      sample).
+    training: Boolean for training or testing datasets.
+
+  Returns:
+    A Spark DataFrame in which each row contains the slide number, tumor
+    score, molecular score, and the sample stretched out into a Vector.
+  """
+  if training:
+    # Append labels
+    samples_with_labels = (rdd.map(
+        lambda tup: (tup[0], tup[1], tup[2], Vectors.dense(flatten_sample(tup[3])))))
+    df = samples_with_labels.toDF(["slide_num", "tumor_score", "molecular_score", "sample"])
+    df = df.select(df.slide_num.astype("int"), df.tumor_score.astype("int"),
+                     df.molecular_score, df["sample"])
+  else:  # testing data -- no labels
+    samples = (rdd.map(lambda tup: (tup[0], Vectors.dense(flatten_sample(tup[1])))))
+    df = samples.toDF(["slide_num", "sample"])
+    df = df.select(df.slide_num.astype("int"), df["sample"])
+  return df
+
+
+def save_rdd_2_jpeg(rdd, save_dir):
+  """
+  Save the Spark RDD into JPEG
+
+  Args:
+    rdd: the spark RDD with or without labels. The RDD element could be
+     a tuple with labels (slide_num, tumor_score, molecular_score, sample)
+     or a tuple without labels, e.g. (slide_num, sample)
+    save_dir: the file directory at which to save JPEGs
+  """
+  rdd.foreach(lambda sample_element: save_2_jpeg(sample_element, save_dir))
+
+
+def save_2_jpeg(sample_element, save_dir):
+  """
+  Save the sample with or without labels into JPEG
+
+  Args:
+    sample_element: it may be a sample tuple with labels, e.g. (slide_num, tumor_score, molecular_score, sample)
+      or a sample tuple without labels, e.g. (slide_num, sample)
+    save_dir: the file directory at which to save JPEGs
+  """
+  if len(sample_element) == 4: # for the sample element with labels
+    save_labelled_sample_2_jpeg(sample_element, save_dir)
+  elif len(sample_element) == 2: # for the sample element without labels
+    save_nonlabelled_sample_2_jpeg(sample_element, save_dir)
+  else:
+    raise ValueError("This type of sample_element is not supported yet")
+
+
+def save_nonlabelled_sample_2_jpeg(sample, save_dir):
+  """
+  Save the sample without labels into JPEG
+
+  Args:
+    sample_element: a sample tuple without labels, e.g. (slide_num, sample)
+    save_dir: the file directory at which to save JPEGs
+  """
+  slide_num, img_value = sample
+  filename = '{slide_num}_{hash}.jpeg'.format(
+    slide_num=slide_num, hash=np.random.randint(1e4))
+  filepath = os.path.join(save_dir, filename)
+  save_jpeg_help(img_value, filepath)
+
+
+def save_labelled_sample_2_jpeg(sample_with_label, save_dir):
+  """
+  Save the sample with labels into JPEG
+
+  Args:
+    sample_element: a sample tuple with labels, e.g. (slide_num, tumor_score, molecular_score, sample)
+    save_dir: the file directory at which to save JPEGs
+  """
+  slide_num, tumor_score, molecular_score, img_value = sample_with_label
+  filename = '{slide_num}_{hash}.jpeg'.format(
+      slide_num=slide_num, hash=np.random.randint(1e4))
+  class_dir = os.path.join(save_dir, str(tumor_score))
+  filepath = os.path.join(class_dir, filename)
+  save_jpeg_help(img_value, filepath)
+
+
+def save_jpeg_help(img_value, filepath):
+  """
+   Save data into JPEG
+
+   Args:
+     img_value: the image value with the size (img_size_x, img_size_y, channels)
+     file path: the file path at which to save JPEGs
+   """
+  dir = os.path.dirname(filepath)
+  os.makedirs(dir, exist_ok=True)
+  img = Image.fromarray(img_value.astype(np.uint8), 'RGB')
+  img.save(filepath)
 

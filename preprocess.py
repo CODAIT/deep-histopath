@@ -33,7 +33,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from pyspark.sql import SparkSession
 
-from breastcancer.preprocessing import add_row_indices, get_labels_df, preprocess, save, sample
+from breastcancer.preprocessing import add_row_indices, get_labels_df, preprocess, save_df, sample, rdd_2_df, save_rdd_2_jpeg
 
 
 # Create new SparkSession
@@ -63,22 +63,30 @@ spark.sparkContext.addPyFile(zipname)
 tile_size = 256
 sample_size = 256
 grayscale = False
-num_partitions = 20000
+num_partitions = 200
 training = True
+save_jpegs = True
+convert2DF = False
 row_indices = False
 train_frac = 0.8
 sample_frac=0.01
 seed = 42
 folder = "data"  # Linux-filesystem directory to read raw WSI data
 save_folder = "data"  # Hadoop-supported directory in which to save DataFrames
-train_df_path = os.path.join(save_folder, "train_{}{}.parquet".format(sample_size,
+train_rdd_folder_jpeg = os.path.join(save_folder, "train_{}{}".format(sample_size,
     "_grayscale" if grayscale else ""))
-val_df_path = os.path.join(save_folder, "val_{}{}.parquet".format(sample_size,
+val_rdd_folder_jpeg = os.path.join(save_folder, "val_{}{}".format(sample_size,
     "_grayscale" if grayscale else ""))
-train_sample_path = os.path.join(save_folder, "train_{}_sample_{}{}.parquet".format(sample_frac,
-    sample_size, "_grayscale" if grayscale else ""))
-val_sample_path = os.path.join(save_folder, "val_{}_sample_{}{}.parquet".format(sample_frac,
-    sample_size, "_grayscale" if grayscale else ""))
+
+train_df_path_parquet = os.path.join(save_folder, "train_{}{}.parquet".format(sample_size,
+    "_grayscale" if grayscale else ""))
+val_df_path_parquet = os.path.join(save_folder, "val_{}{}.parquet".format(sample_size,
+    "_grayscale" if grayscale else ""))
+train_sample_path_parquet = os.path.join(save_folder, "train_{}_sample_{}{}.parquet"
+    .format(sample_frac, sample_size, "_grayscale" if grayscale else ""))
+val_sample_path_parquet = os.path.join(save_folder, "val_{}_sample_{}{}.parquet"
+    .format(sample_frac, sample_size, "_grayscale" if grayscale else ""))
+
 
 # Get labels
 labels_df = get_labels_df(folder)
@@ -88,28 +96,36 @@ train, val = train_test_split(labels_df, train_size=train_frac, stratify=labels_
                               random_state=seed)
 
 # Process train & val slides
-train_df = preprocess(spark, train.index, tile_size=tile_size, sample_size=sample_size,
+train_rdd = preprocess(spark, train.index, tile_size=tile_size, sample_size=sample_size,
                       grayscale=grayscale, num_partitions=num_partitions, folder=folder)
-val_df = preprocess(spark, val.index, tile_size=tile_size, sample_size=sample_size,
+val_rdd = preprocess(spark, val.index, tile_size=tile_size, sample_size=sample_size,
                     grayscale=grayscale, num_partitions=num_partitions, folder=folder)
 
-if row_indices:
-  # Add row indices
-  train_df = add_row_indices(train_df)
-  val_df = add_row_indices(val_df)
+if save_jpegs:
+  save_rdd_2_jpeg(train_rdd, train_rdd_folder_jpeg)
+  save_rdd_2_jpeg(val_rdd, val_rdd_folder_jpeg)
 
-# Save train & val DataFrames
-save(train_df, train_df_path, sample_size, grayscale)
-save(val_df, val_df_path, sample_size, grayscale)
+if convert2DF:
+  train_df = rdd_2_df(train_rdd)
+  val_df = rdd_2_df(val_rdd)
 
-if sample_frac > 0:
-  # Sample Data
-  train_df = spark.read.load(train_df_path)
-  val_df = spark.read.load(val_df_path)
-  train_sample = sample(train_df, sample_frac, seed)
-  val_sample = sample(val_df, sample_frac, seed)
+  if row_indices:
+    # Add row indices
+    train_df = add_row_indices(train_df)
+    val_df = add_row_indices(val_df)
 
-  # Save sampled DataFrames.
-  save(train_sample, train_sample_path, sample_size, grayscale)
-  save(val_sample, val_sample_path, sample_size, grayscale)
+  # Save train & val DataFrames
+  save_df(train_df, train_df_path_parquet, sample_size, grayscale)
+  save_df(val_df, val_df_path_parquet, sample_size, grayscale)
+
+  if sample_frac > 0:
+    # Sample Data
+    train_df = spark.read.load(train_df_path_parquet)
+    val_df = spark.read.load(val_df_path_parquet)
+    train_sample = sample(train_df, sample_frac, seed)
+    val_sample = sample(val_df, sample_frac, seed)
+
+    # Save sampled DataFrames.
+    save_df(train_sample, train_sample_path_parquet, sample_size, grayscale)
+    save_df(val_sample, val_sample_path_parquet, sample_size, grayscale)
 
