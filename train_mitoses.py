@@ -20,8 +20,7 @@ def get_label(filename):
   """Get label from filename.
 
   Args:
-    filename: String in format
-      "**/train|val/mitosis|normal/{lab}_{case}_{region}_{row}_{col}_{suffix}.{ext}",
+    filename: String in format "**/train|val/mitosis|normal/name.{ext}",
       where the label is either "mitosis" or "normal".
 
   Returns:
@@ -30,7 +29,6 @@ def get_label(filename):
   """
   # note file name format:
   # lab is a single digit, case and region are two digits with padding if needed
-  # "**/train|val/mitosis|normal/{lab}_{case}_{region}_{row}_{col}_{suffix}.{ext}"
   splits = tf.string_split([filename], "/")
   label_str = splits.values[-2]
   # check that label string is valid
@@ -143,7 +141,8 @@ def initialize_variables(sess):
   # NOTE: the global variables initializer will erase the pretrained weights,
   # so we instead only initialize the other variables.
   # NOTE: reproduced from K._initialize_variables()
-  # TODO: extract this out into a function and add a test case
+  # EDIT: this was updated in the master branch in commit
+  # https://github.com/fchollet/keras/commit/9166733c3c144739868fe0c30d57b861b4947b44
   variables = tf.global_variables()
   uninitialized_variables = []
   for v in variables:
