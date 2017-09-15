@@ -70,8 +70,9 @@ def preprocess(filename, patch_size):
   """
   #  return image_resized, label
   label = get_label(filename)
-  label = tf.expand_dims(label, -1)  # tf sucks
+  label = tf.expand_dims(label, -1)  # make each scalar label a vector of length 1 to match model
   image = get_image(filename, patch_size)
+  # TODO: log this image
   image = normalize(image)
   return image, label, filename
 
@@ -125,24 +126,25 @@ def initialize_variables(sess):
     Integer global step and global epoch values.
   """
   # NOTE: Keras keeps track of the variables that are initialized, and any call to
-  # `K.get_session()`, which is even used internally, will include a call to initialize variables
-  # via `K._initalize_variables()`.  There is a situation in which resuming from a previous
-  # checkpoint and then saving the model after the first epoch will result in part of the model
-  # being reinitialized.  The problem is that calling `K.get_session()` here is too soon to
-  # initialize any variables, and then the resume branch skips any variable initialization, and then
-  # the `model.save` codepath ends up calling `K.get_session()`, thus causing part of the model to
-  # be reinitialized.  Specifically, the VGG base is fine because it is initialized when the
-  # pretrained weights are added in, but the new dense classifier will not be marked as initialized
-  # by Keras.  The non-resume branch will initialize any variables not initialized by Keras yet, and
-  # thus will avoid this issue.  It could be possible to use
-  # `K.manual_variable_initialization(True)` and then manually initialize all variables, but this
-  # would cause any pretrained weights to be removed.  Instead, we should initialize all variables
-  # first with the equivalent of `K._initialize_variables`, and then call resume.
-  # NOTE: the global variables initializer will erase the pretrained weights,
-  # so we instead only initialize the other variables.
-  # NOTE: reproduced from K._initialize_variables()
+  # `K.get_session()`, which is even used internally, will include logic to initialize variables.
+  # There is a situation in which resuming from a previous checkpoint and then saving the model
+  # after the first epoch will result in part of the model being reinitialized.  The problem is
+  # that calling `K.get_session()` here is too soon to initialize any variables, the resume branch
+  # skips any variable initialization, and then the `model.save` code path ends up calling
+  # `K.get_session()`, thus causing part of the model to be reinitialized.  Specifically, the model
+  # base is fine because it is initialized when the pretrained weights are added in, but the new
+  # dense classifier will not be marked as initialized by Keras.  The non-resume branch will
+  # initialize any variables not initialized by Keras yet, and thus will avoid this issue.  It
+  # could be possible to use `K.manual_variable_initialization(True)` and then manually initialize
+  # all variables, but this would cause any pretrained weights to be removed.  Instead, we should
+  # initialize all variables first with the equivalent of the logic in `K.get_session()`, and then
+  # call resume.
+  # NOTE: the global variables initializer will erase the pretrained weights, so we instead only
+  # initialize the other variables
+  # NOTE: reproduced from the old K._initialize_variables() function
   # EDIT: this was updated in the master branch in commit
   # https://github.com/fchollet/keras/commit/9166733c3c144739868fe0c30d57b861b4947b44
+  # TODO: given the change in master, reevaluate whether or not this is actually necessary anymore
   variables = tf.global_variables()
   uninitialized_variables = []
   for v in variables:
@@ -197,12 +199,6 @@ def train(train_path, val_path, exp_path, patch_size, batch_size, clf_epochs, fi
   #   * logging func
   #   * train func
 
-  sess = K.get_session()
-
-  # debugger
-  #from tensorflow.python import debug as tf_debug
-  #sess = tf_debug.LocalCLIDebugWrapperSession(sess)
-
   # data
   with tf.name_scope("data"):
     # TODO: add data augmentation function
@@ -210,13 +206,11 @@ def train(train_path, val_path, exp_path, patch_size, batch_size, clf_epochs, fi
         .shuffle(10000)
         .map(lambda x: preprocess(x, patch_size), num_threads=threads,
           output_buffer_size=100*batch_size)
-        .batch(batch_size)
-        )
+        .batch(batch_size))
     val_dataset = (tf.contrib.data.Dataset.list_files('{}/*/*.jpg'.format(val_path))
         .map(lambda x: preprocess(x, patch_size), num_threads=threads,
           output_buffer_size=100*batch_size)
-        .batch(batch_size)
-        )
+        .batch(batch_size))
 
     iterator = tf.contrib.data.Iterator.from_structure(train_dataset.output_types,
                                                        train_dataset.output_shapes)
@@ -276,11 +270,13 @@ def train(train_path, val_path, exp_path, patch_size, batch_size, clf_epochs, fi
     #    outs.append(out)
     #model = Model(inputs=ins, outputs=outs)  # multi-GPU, data-parallel model
     model = model_tower
-    #import pdb; pdb.set_trace()
 
     # call model on dataset images to compute logits and predictions
-    logits = model(images)  # tf prefers to feed logits into a combined sigmoid and logistic loss function for numerical stability
-    preds = tf.round(tf.nn.sigmoid(logits), name="preds")  # for metric computation; implicit threshold at 0.5
+    # NOTE: tf prefers to feed logits into a combined sigmoid and logistic loss function for
+    # numerical stability
+    # NOTE: preds has an implicit threshold at 0.5
+    logits = model(images)
+    preds = tf.round(tf.nn.sigmoid(logits), name="preds")
 
   # loss
   with tf.name_scope("loss"):
@@ -336,8 +332,9 @@ def train(train_path, val_path, exp_path, patch_size, batch_size, clf_epochs, fi
   images_summary = tf.summary.image("images", images) #, max_outputs=10)
   actual_batch_size_summary = tf.summary.scalar("batch_size", actual_batch_size)
   minibatch_loss_summary = tf.summary.scalar("minibatch_loss", loss)
-  minibatch_summaries = tf.summary.merge([minibatch_loss_summary]) #, actual_batch_size_summary,
-      #images_summary])
+  minibatch_summaries = tf.summary.merge([minibatch_loss_summary, images_summary])
+      #, actual_batch_size_summary, #images_summary])
+
   # epoch summaries
   epoch_loss_summary = tf.summary.scalar("epoch_avg_loss", mean_loss)
   epoch_acc_summary = tf.summary.scalar("epoch_acc", acc)
@@ -346,10 +343,11 @@ def train(train_path, val_path, exp_path, patch_size, batch_size, clf_epochs, fi
   epoch_f1_summary = tf.summary.scalar("epoch_f1", f1)
   epoch_summaries = tf.summary.merge([epoch_loss_summary, epoch_acc_summary,
     epoch_ppv_summary, epoch_recall_summary, epoch_f1_summary])
+
   #all_summaries = tf.summary.merge_all()
 
   # use train and val writers so that plots can be on same graph
-  writer = tf.summary.FileWriter(exp_path, sess.graph)
+  writer = tf.summary.FileWriter(exp_path, tf.get_default_graph())  #sess.graph)
   train_writer = tf.summary.FileWriter(os.path.join(exp_path, "train"))
   val_writer = tf.summary.FileWriter(os.path.join(exp_path, "val"))
 
@@ -359,7 +357,12 @@ def train(train_path, val_path, exp_path, patch_size, batch_size, clf_epochs, fi
   saver = tf.train.Saver()
 
   # initialize stuff
+  sess = K.get_session()
   global_step, global_epoch = initialize_variables(sess)
+
+  # debugger
+  #from tensorflow.python import debug as tf_debug
+  #sess = tf_debug.LocalCLIDebugWrapperSession(sess)
 
   if resume:
     saver.restore(sess, checkpoint_filename)
@@ -439,7 +442,7 @@ if __name__ == "__main__":
       help="parent path in which to store experiment folders (default: %(default)s)")
   parser.add_argument("--exp_name", default=None,
       help="path within the experiment parent path in which to store the model checkpoints, "\
-           "logs, etc. for this experiment "\
+           "logs, etc. for this experiment; an existing path can be used to resume training "\
            "(default: %%y-%%m-%%d_%%H:%%M:%%S_patch_size=x_batch_size=x_clf_epochs=x_"\
            "finetune_epochs=x_clf_lr=x_finetune_lr=x_l2=x)")
   parser.add_argument("--patch_size", type=int, default=64,
@@ -496,8 +499,8 @@ if __name__ == "__main__":
   with open(os.path.join(exp_path, 'args.txt'), 'w') as f:
     f.write(str(args))
 
-  # copy this script to the base save folder
-  shutil.copy2(os.path.realpath(__file__), base_save_path)
+  # copy this script to the experiment folder
+  shutil.copy2(os.path.realpath(__file__), exp_path)
 
   # train!
   train(train_path, val_path, exp_path, args.patch_size, args.batch_size,
@@ -512,28 +515,39 @@ if __name__ == "__main__":
 
 def test_get_label():
   import pytest
-  sess = tf.Session()
 
   # mitosis
+  K.clear_session()
+  tf.reset_default_graph()
   filename = "train/mitosis/1_03_05_713_348.jpg"
   label_op = get_label(filename)
+  sess = K.get_session()
   label = sess.run(label_op)
   assert label == 1
 
   # normal
+  K.clear_session()
+  tf.reset_default_graph()
   filename = "train/normal/1_03_05_713_348.jpg"
   label_op = get_label(filename)
+  sess = K.get_session()
   label = sess.run(label_op)
   assert label == 0
 
   # wrong label name
   with pytest.raises(tf.errors.InvalidArgumentError):
+    K.clear_session()
+    tf.reset_default_graph()
     filename = "train/unknown/1_03_05_713_348.jpg"
     label_op = get_label(filename)
+    sess = K.get_session()
     label = sess.run(label_op)
 
 
 def test_resettable_metric():
+  K.clear_session()
+  tf.reset_default_graph()
+
   x = tf.placeholder(tf.int32, [None, 1])
   x1 = np.array([1,0,0,0]).reshape(4,1)
   x2 = np.array([0,0,0,0]).reshape(4,1)
@@ -573,7 +587,11 @@ def test_resettable_metric():
 
 
 def test_initialize_variables():
-  import pytest
+  # NOTE: keep the `K.get_session()` call up here to ensure the the `initialize_variables` function
+  # is working properly.
+  tf.reset_default_graph()
+  #K.manual_variable_initialization(True)
+  K.clear_session()  # this is needed if we want to create sessions at the beginning
   sess = K.get_session()
 
   # create model with a mix of pretrained and new weights
@@ -587,10 +605,28 @@ def test_initialize_variables():
   logits = Dense(1)(x)
   model = Model(inputs=inputs, outputs=logits, name="model")
 
+  # check that pre-trained model is initialized
+  # NOTE: This occurs because using pretrained weights ends up calling `K.batch_set_value`, which
+  # creates assignment ops and calls `K.get_session()` to get the session and then run the
+  # assignment ops.  The `K.get_session()` call initializes the model variables to random values
+  # and sets the `_keras_initialized` attribute to True for each variable.  Then the assignment ops
+  # run and actually set the variables to the pretrained values.  Without pretrained weights, the
+  # `K.get_session()` function is not called upon model creation, and thus these variables will
+  # remain uninitialized.  Furthermore, if we set `K.manual_variable_initialization(True)`, the
+  # pretrained weights will be loaded, but there will be no indication that those variables were
+  # already initialized, and thus we will end up reinitializing them to random values.  This is all
+  # a byproduct of using Keras + TensorFlow in a hybrid setup, and we should look into making this
+  # less brittle.
+  for v in model_base.weights:
+    assert hasattr(v, '_keras_initialized') and v._keras_initialized  # check for initialization
+    assert sess.run(tf.is_variable_initialized(v))  # check for initialization
+
   # the new dense layer is not initialized yet
-  with pytest.raises(AssertionError):
-    for v in tf.global_variables():
-      assert hasattr(v, '_keras_initialized') and v._keras_initialized  # check for initialization
+  #with pytest.raises(AssertionError):
+  assert len(model.layers[-1].weights) == 2
+  for v in model.layers[-1].weights:
+    assert not getattr(v, '_keras_initialized', False)
+    assert not sess.run(tf.is_variable_initialized(v))
 
   # initialize variables, including marking them with the `_keras_initialized` attribute
   initialize_variables(sess)
@@ -605,4 +641,5 @@ def test_initialize_variables():
   # function, we can avoid these problems.
   for v in tf.global_variables():
     assert hasattr(v, '_keras_initialized') and v._keras_initialized  # check for initialization
+    assert sess.run(tf.is_variable_initialized(v))  # check for initialization
 

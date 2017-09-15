@@ -457,14 +457,14 @@ if __name__ == "__main__":
   parser.add_argument("--rotations_train", type=int, default=5,
       help="number of evenly-spaced rotation augmented patches to extract for each mitosis in the "\
            "training set, in addition to the centered mitosis patch (default: %(default)s)")
-  parser.add_argument("--rotations_val", type=int, default=5,
+  parser.add_argument("--rotations_val", type=int, default=0,
       help="number of evenly-spaced rotation augmented patches to extract for each mitosis in the "\
            "validation set, in addition to the centered mitosis patch (default: %(default)s)")
   parser.add_argument("--translations_train", type=int, default=5,
       help="number of random translation augmented patches to extract for each rotated mitosis "\
            "patch in the training set, in addition to the centered rotated mitosis patch "\
            "(default: %(default)s)")
-  parser.add_argument("--translations_val", type=int, default=5,
+  parser.add_argument("--translations_val", type=int, default=0,
       help="number of random translation augmented patches to extract for each rotated mitosis "\
            "patch in the validation set, in addition to the centered rotated mitosis patch "\
            "(default: %(default)s)")
