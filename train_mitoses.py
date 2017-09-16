@@ -57,13 +57,15 @@ def get_image(filename, patch_size):
   return image_resized
 
 
-def preprocess(filename, patch_size):
+def preprocess(filename, patch_size, augmentation):
   """Get image and label from filename.
 
   Args:
     filename: String filename of an image.
     patch_size: Integer length to which the square image will be
       resized.
+    augmentation: Boolean for whether or not to apply random augmentation
+      to the image.
 
   Returns:
     Tuple of a TensorFlow image tensor, a binary label, and a filename.
@@ -72,8 +74,9 @@ def preprocess(filename, patch_size):
   label = get_label(filename)
   label = tf.expand_dims(label, -1)  # make each scalar label a vector of length 1 to match model
   image = get_image(filename, patch_size)
-  # TODO: log this image
   image = normalize(image)
+  if augmentation:
+    image = augment(image)
   return image, label, filename
 
 
@@ -88,6 +91,27 @@ def normalize(image):
   """
   image = image[..., ::-1]  # rbg -> bgr
   image = image - [103.939, 116.779, 123.68]  # mean centering using imagenet means
+  return image
+
+
+def augment(image):
+  """Apply random data augmentation to the given image.
+
+  Args:
+    image: A Tensor of shape (h,w,c).
+
+  Returns:
+    A data-augmented image.
+  """
+  # NOTE: these values currently come from the Google pathology paper:
+  # Liu Y, Gadepalli K, Norouzi M, Dahl GE, Kohlberger T, Boyko A, et al.
+  # Detecting Cancer Metastases on Gigapixel Pathology Images. arXiv.org. 2017.
+  image = tf.image.random_flip_up_down(image)
+  image = tf.image.random_flip_left_right(image)
+  image = tf.image.random_brightness(image, 64/255)
+  image = tf.image.random_contrast(image, 0, 0.75)
+  image = tf.image.random_hue(image, 0.04)
+  image = tf.image.random_saturation(image, 0, 0.25)
   return image
 
 
@@ -159,8 +183,9 @@ def initialize_variables(sess):
   return global_step, global_epoch
 
 
-def train(train_path, val_path, exp_path, patch_size, batch_size, clf_epochs, finetune_epochs,
-    clf_lr, finetune_lr, finetune_layers, l2, log_interval, threads, checkpoint, resume):
+def train(train_path, val_path, exp_path, model_name, patch_size, batch_size, clf_epochs,
+    finetune_epochs, clf_lr, finetune_lr, finetune_layers, l2, augmentation, log_interval, threads,
+    checkpoint, resume):
   """Train a model.
 
   Args:
@@ -170,6 +195,7 @@ def train(train_path, val_path, exp_path, patch_size, batch_size, clf_epochs, fi
       This should contain folders for each class.
     exp_path: String path in which to store the model checkpoints, logs,
       etc. for this experiment
+    model_name: String indicating the model to use.
     patch_size: Integer length to which the square patches will be
       resized.
     batch_size: Integer batch size.
@@ -183,6 +209,8 @@ def train(train_path, val_path, exp_path, patch_size, batch_size, clf_epochs, fi
       pretrained portion of the model to fine-tune.  The new classifier
       layers will still be trained during fine-tuning as well.
     l2: Float L2 global regularization value.
+    augmentation: Boolean for whether or not to apply random augmentation
+      to the image.
     log_interval: Integer number of steps between logging during
       training.
     threads: Integer number of threads for dataset buffering.
@@ -204,11 +232,11 @@ def train(train_path, val_path, exp_path, patch_size, batch_size, clf_epochs, fi
     # TODO: add data augmentation function
     train_dataset = (tf.contrib.data.Dataset.list_files('{}/*/*.jpg'.format(train_path))
         .shuffle(10000)
-        .map(lambda x: preprocess(x, patch_size), num_threads=threads,
+        .map(lambda x: preprocess(x, patch_size, augmentation), num_threads=threads,
           output_buffer_size=100*batch_size)
         .batch(batch_size))
     val_dataset = (tf.contrib.data.Dataset.list_files('{}/*/*.jpg'.format(val_path))
-        .map(lambda x: preprocess(x, patch_size), num_threads=threads,
+        .map(lambda x: preprocess(x, patch_size, False), num_threads=threads,
           output_buffer_size=100*batch_size)
         .batch(batch_size))
 
@@ -222,41 +250,47 @@ def train(train_path, val_path, exp_path, patch_size, batch_size, clf_epochs, fi
 
   # models
   with tf.name_scope("model"):
-    ## logistic regression classifier
-    #model_base = keras.models.Sequential()  # dummy since we aren't fine-tuning this model
-    #inputs = Input(shape=input_shape)
-    #x = Flatten()(inputs)
-    ## init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
-    #logits = Dense(1, kernel_initializer="glorot_normal",
-    #    kernel_regularizer=keras.regularizers.l2(l2))(x)
-    #model_tower = Model(inputs=inputs, outputs=logits, name="model")
+    if model_name == "logreg":
+      # logistic regression classifier
+      model_base = keras.models.Sequential()  # dummy since we aren't fine-tuning this model
+      inputs = Input(shape=input_shape)
+      x = Flatten()(inputs)
+      # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
+      logits = Dense(1, kernel_initializer="glorot_normal",
+          kernel_regularizer=keras.regularizers.l2(l2))(x)
+      model_tower = Model(inputs=inputs, outputs=logits, name="model")
 
-    # Create model by replacing classifier of VGG16 model with new
-    # classifier specific to the breast cancer problem.
-    #with tf.device("/cpu"):
-    inputs = Input(shape=input_shape)
-    model_base = VGG16(include_top=False, input_shape=input_shape, input_tensor=inputs)
-    x = model_base.output
-    #x = Flatten()(x)
-    x = GlobalAveragePooling2D()(x)
-    #x = Dropout(0.5)(x)
-    # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
-    logits = Dense(1, kernel_initializer="glorot_normal",
-        kernel_regularizer=keras.regularizers.l2(l2))(x)
-    model_tower = Model(inputs=inputs, outputs=logits, name="model")
+    elif model_name == "vgg":
+      # create a model by replacing the classifier of a VGG16 model with a new classifier specific
+      # to the breast cancer problem
+      #with tf.device("/cpu"):
+      inputs = Input(shape=input_shape)
+      model_base = VGG16(include_top=False, input_shape=input_shape, input_tensor=inputs)
+      x = model_base.output
+      #x = Flatten()(x)
+      x = GlobalAveragePooling2D()(x)
+      #x = Dropout(0.5)(x)
+      # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
+      logits = Dense(1, kernel_initializer="glorot_normal",
+          kernel_regularizer=keras.regularizers.l2(l2))(x)
+      model_tower = Model(inputs=inputs, outputs=logits, name="model")
 
-    ## Create model by replacing classifier of ResNet50 model with new
-    ## classifier specific to the breast cancer problem.
-    ##with tf.device("/cpu"):
-    #inputs = Input(shape=input_shape)
-    #model_base = ResNet50(include_top=False, input_shape=input_shape, input_tensor=inputs)
-    #x = model_base.output
-    #x = Flatten()(x)
-    ##x = GlobalAveragePooling2D()(x)
-    ## init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
-    #logits = Dense(1, kernel_initializer="glorot_normal",
-    #    kernel_regularizer=keras.regularizers.l2(l2))(x)
-    #model_tower = Model(inputs=inputs, outputs=logits, name="model")
+    elif model_name == "resnet":
+      # create a model by replacing the classifier of a ResNet50 model with a new classifier
+      # specific to the breast cancer problem
+      #with tf.device("/cpu"):
+      inputs = Input(shape=input_shape)
+      model_base = ResNet50(include_top=False, input_shape=input_shape, input_tensor=inputs)
+      x = model_base.output
+      x = Flatten()(x)
+      #x = GlobalAveragePooling2D()(x)
+      # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
+      logits = Dense(1, kernel_initializer="glorot_normal",
+          kernel_regularizer=keras.regularizers.l2(l2))(x)
+      model_tower = Model(inputs=inputs, outputs=logits, name="model")
+
+    else:
+      raise Exception("model name unknown: {}".format(model_name))
 
     # TODO: add this when it's necessary, and move to a separate function
     ## Multi-GPU exploitation via a linear combination of GPU loss functions.
@@ -443,8 +477,10 @@ if __name__ == "__main__":
   parser.add_argument("--exp_name", default=None,
       help="path within the experiment parent path in which to store the model checkpoints, "\
            "logs, etc. for this experiment; an existing path can be used to resume training "\
-           "(default: %%y-%%m-%%d_%%H:%%M:%%S_patch_size=x_batch_size=x_clf_epochs=x_"\
-           "finetune_epochs=x_clf_lr=x_finetune_lr=x_l2=x)")
+           "(default: %%y-%%m-%%d_%%H:%%M:%%S_model_name_patch_size_x_batch_size_x_clf_epochs_x_"\
+           "finetune_epochs_x_clf_lr_x_finetune_lr_x_l2_x)")
+  parser.add_argument("--model_name", default="vgg",
+      help="name of the model to use in ['logreg', 'vgg', 'resnet'] (default: %(default)s)")
   parser.add_argument("--patch_size", type=int, default=64,
       help="integer length to which the square patches will be resized (default: %(default)s)")
   parser.add_argument("--batch_size", type=int, default=32,
@@ -464,6 +500,12 @@ if __name__ == "__main__":
           "(default: %(default)s)")
   parser.add_argument("--l2", type=float, default=0.01,
       help="amount of l2 weight regularization (default: %(default)s)")
+  augment_parser = parser.add_mutually_exclusive_group(required=False)
+  augment_parser.add_argument("--augment", dest="augment", action="store_true",
+      help="apply random augmentation to the training images (default: True)")
+  augment_parser.add_argument("--no_augment", dest="augment", action="store_false",
+      help="do not apply random augmentation to the training images (default: False)")
+  parser.set_defaults(augment=True)
   parser.add_argument("--log_interval", type=int, default=100,
       help="number of steps between logging during training (default: %(default)s)")
   parser.add_argument("--threads", type=int, default=5,
@@ -485,9 +527,10 @@ if __name__ == "__main__":
 
   if args.exp_name == None:
     date = datetime.strftime(datetime.today(), "%y%m%d_%H%M%S")
-    args.exp_name = f"{date}_patch_size_{args.patch_size}_batch_size_{args.batch_size}_"\
-                    f"clf_epochs_{args.clf_epochs}_finetune_epochs_{args.finetune_epochs}_"\
-                    f"clf_lr_{args.clf_lr}_finetune_lr_{args.finetune_lr}_l2_{args.l2}"
+    args.exp_name = f"{date}_{args.model_name}_patch_size_{args.patch_size}_batch_size_"\
+                    f"{args.batch_size}_clf_epochs_{args.clf_epochs}_finetune_epochs_"\
+                    f"{args.finetune_epochs}_clf_lr_{args.clf_lr}_finetune_lr_{args.finetune_lr}_"\
+                    f"l2_{args.l2}"
   exp_path = os.path.join(args.exp_parent_path, args.exp_name)
 
   # make experiment folder
@@ -503,9 +546,9 @@ if __name__ == "__main__":
   shutil.copy2(os.path.realpath(__file__), exp_path)
 
   # train!
-  train(train_path, val_path, exp_path, args.patch_size, args.batch_size,
+  train(train_path, val_path, exp_path, args.model_name, args.patch_size, args.batch_size,
       args.clf_epochs, args.finetune_epochs, args.clf_lr, args.finetune_lr, args.finetune_layers,
-      args.l2, args.log_interval, args.threads, args.checkpoint, args.resume)
+      args.l2, args.augment, args.log_interval, args.threads, args.checkpoint, args.resume)
 
 
 # ---
