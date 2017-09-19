@@ -102,46 +102,48 @@ def extract_patch(im, row, col, size):
   return patch_padded
 
 
-def gen_dense_coords(h, w, size, overlap):
+def gen_dense_coords(h, w, size, stride):
   """Generate centered (row, col) coordinates of patches densely from an
-  image with overlap.
+  image with striding.
 
-  This scans across the image from left to right, top to bottom with
-  some amount of overlap, yielding (row, col) centered coordinates.
+  This slides across the image from left to right, top to bottom by
+  `stride` number of pixels, yielding (row, col) centered coordinates.
 
   Args:
     h: Integer height of the image.
     w: Integer width of the image.
     size: An integer size of the square patch to extract.
-    overlap: An integer number of pixels of overlap for normal patches.
+    stride: An integer number of pixels by which to shift in the
+      sliding window for normal patches.
 
   Returns:
     Yields (row, col) integer coordinates of the center of a patch.
   """
   # check that row, col, and size are within the image bounds
   assert 1 < size <= min(h, w), "size must be > 1 and within the bounds of the image"
-  assert 0 <= overlap < size, "overlap must be an integer >= 0 and < patch size"
+  assert stride > 0, "stride must be an integer > 0"
 
   half_size = round(size / 2)
 
   # generate coordinates
-  for row in range(0, h-size+1, size-overlap):
-    for col in range(0, w-size+1, size-overlap):
+  for row in range(0, h-size+1, stride):
+    for col in range(0, w-size+1, stride):
       yield row + half_size, col + half_size  # centered coordinates for this patch
 
 
-def gen_normal_coords(mask, size, overlap, threshold):
+def gen_normal_coords(mask, size, stride, threshold):
   """Generate (row, col) coordinates for normal patches.
 
-  This generates coordinates for normal patches that may overlap with
-  mitosis patches up to `threshold` percentage, and that overlap with
-  each other by `overlap` pixels.
+  This generates coordinates for normal patches in a sliding window
+  fashion with the given stride, possibly overlapping with mitosis
+  patches up to `threshold` percentage.
 
   Args:
     mask: A binary mask, indicating where the mitosis patches are
       located, of the same height and width as the region image.
     size: An integer size of the square patch to extract.
-    overlap: An integer number of pixels of overlap for normal patches.
+    stride: An integer number of pixels by which to shift in the
+      sliding window for normal patches.
     threshold: A decimal inclusive upper bound on the percentage of
       allowable overlap with mitosis patches.
 
@@ -152,10 +154,10 @@ def gen_normal_coords(mask, size, overlap, threshold):
   assert np.ndim(mask) == 2, "mask must be of shape (h, w)"
   h, w = mask.shape
   assert 1 < size <= min(h, w), "size must be > 1 and within the bounds of the image"
-  assert 0 <= overlap < size, "overlap must be an integer >= 0 and < patch size"
+  assert stride > 0, "stride must be an integer > 0"
   assert 0 <= threshold <= 1, "threshold must be a valid decimal percentage"
 
-  for row, col in gen_dense_coords(h, w, size, overlap):
+  for row, col in gen_dense_coords(h, w, size, stride):
     # extract patch from mask to check for overlap with mitosis patch
     mask_patch = np.squeeze(extract_patch(np.atleast_3d(mask), row, col, size))
     if np.mean(mask_patch) <= threshold:
@@ -182,10 +184,11 @@ def gen_random_translation(h, w, row, col, max_shift):
   # check that row, col, and size are within the image bounds
   assert 0 <= row <= h, "row is outside of the image height"
   assert 0 <= col <= w, "col is outside of the image width"
-  assert max_shift > 0, "max_shift must be > 0"
+  assert max_shift >= 0, "max_shift must be >= 0"
 
-  row_shifted = min(max(0, row + np.random.randint(-max_shift, max_shift)), h)
-  col_shifted = min(max(0, col + np.random.randint(-max_shift, max_shift)), w)
+  # NOTE: np.random.randint has exclusive upper bounds
+  row_shifted = min(max(0, row + np.random.randint(-max_shift, max_shift + 1)), h)
+  col_shifted = min(max(0, col + np.random.randint(-max_shift, max_shift + 1)), w)
   row_shift = row_shifted - row
   col_shift = col_shifted - col
   return row_shift, col_shift
@@ -213,8 +216,8 @@ def gen_patches(im, coords, size, rotations, translations, max_shift, p):
     translations: An integer number of random translation augmented
       patches to extract for each rotation (including the 0-degree
       rotation), in addition to a translation of 0.
-    max_shift: Integer upper bound on the spatial shift range for the
-      random translations.
+    max_shift: Integer upper bound on the spatial shift range for
+      the random translations.
     p: A decimal probability of sampling each patch.
 
   Returns:
@@ -230,7 +233,7 @@ def gen_patches(im, coords, size, rotations, translations, max_shift, p):
   assert 1 < size <= min(h, w), "size must be > 1 and within the bounds of the image"
   assert rotations >= 0, "rotations must be >0"
   assert translations >= 0, "translations must be >0"
-  assert max_shift > 0, "max_shift must be > 0"
+  assert max_shift >= 0, "max_shift must be >= 0"
   assert 0 <= p <= 1, "p must be a valid decimal probability"
 
   # convert to uint8 type in order to use PIL to rotate
@@ -262,21 +265,20 @@ def gen_patches(im, coords, size, rotations, translations, max_shift, p):
   assert bounding_size < min(h, w), "patch size is too large to avoid empty corners after rotation"
 
   for row, col in coords:
-    bounding_patch = Image.fromarray(extract_patch(im, row, col, bounding_size))
+    bounding_patch = Image.fromarray(extract_patch(im, row, col, bounding_size))  # PIL for rotation
 
+    # rotations
     for theta in np.linspace(0, 180, rotations+1, dtype=int):  # always include 0 degrees
-      # rotations
-      rotated_patch = bounding_patch.rotate(theta, Image.BILINEAR)
+      rotated_patch = np.asarray(bounding_patch.rotate(theta, Image.BILINEAR))  # then back to numpy
 
       # random translations
       shifts = [gen_random_translation(h, w, row, col, max_shift) for _ in range(rotations)]
       for row_shift, col_shift in [(0, 0)] + shifts:  # always include 0 shift
-        patch = extract_patch(np.asarray(rotated_patch), row_center + row_shift,
-            col_center + col_shift, size)
+        patch = extract_patch(rotated_patch, row_center + row_shift, col_center + col_shift, size)
+        patch = patch.astype(orig_dtype)  # convert back to original data type
 
         # sample from a Bernoulli distribution with probability `p`
         if np.random.binomial(1, p):
-          patch = patch.astype(orig_dtype)  # convert back to original data type
           yield patch, row, col, theta, row_shift, col_shift
 
 
@@ -309,22 +311,22 @@ def save_patch(patch, path, lab, case, region, row, col, rotation, row_shift, co
   """
   # lab is a single digit, case and region are two digits with padding if needed
   # TODO: extract filename generation and arg extraction into separate functions
-  filename = f"{lab}_{case}_{region}_{row}_{col}_{rotation}_{row_shift}_{col_shift}_{suffix}.{ext}"
+  filename = f"{lab}_{case}_{region}_{row}_{col}_{rotation}_{row_shift}_{col_shift}{suffix}.{ext}"
   file_path = os.path.join(path, filename)
   Image.fromarray(patch).save(file_path)
 
 
 def preprocess(images_path, labels_path, base_save_path, train_size, patch_size, rotations_train,
-    rotations_val, translations_train, translations_val, max_shift, p_normal_train, p_normal_val,
-    overlap_threshold, overlap_normal_train, overlap_normal_val, seed=None):
+    rotations_val, translations_train, translations_val, max_shift, stride_train, stride_val,
+    overlap_threshold, p_train, p_val, seed=None):
   """Generate a mitosis detection patch dataset.
 
   This generates train/val datasets of mitosis/normal image patches for
   the mitosis detection problem.  The mitosis patches will be extracted
-  with centers at the given coordinates, along with random translations
-  from those coordinates.  Normal patches will be extracted from areas
-  outside of the mitosis patches, with some small allowable percentage
-  of overlap.  Normal patches may also overlap with each other.  The
+  with centers at the given coordinates, along with random rotations
+  and translations from those coordinates.  Normal patches will be
+  extracted in a sliding window fashion with the given stride, possibly
+  overlapping with mitosis patches up to some given threshold.  The
   train/val split will be performed on overall cases, stratified by lab.
   I.e., the cases from each lab will be separately split into training
   and validation sets, and then the associated sets will be combined at
@@ -354,18 +356,18 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
     translations_val: Integer number of random translation augmented
       patches to extract for each rotated mitosis patch in the
       validation set, in addition to the centered rotated mitosis patch.
-    max_shift: Integer upper bound on the spatial shift range for the
-      random translations.
-    p_normal_train: A decimal probability of sampling each normal patch
-      in the training set.
-    p_normal_val: A decimal probability of sampling each normal patch
-      in the validation set.
+    max_shift: Integer upper bound on the spatial shift range for
+      the random translations.
+    stride_train: An integer number of pixels by which to shift in the
+      sliding window for normal patches in the training set.
+    stride_val: An integer number of pixels by which to shift in the
+      sliding window for normal patches in the validation set.
     overlap_threshold: Decimal inclusive upper bound on the percentage
       of overlap of normal patches with mitosis patches.
-    overlap_normal_train: An integer number of pixels of overlap for
-      normal patches in the training set.
-    overlap_normal_val: An integer number of pixels of overlap for
-      normal patches in the validation set.
+    p_train: A decimal probability of sampling each normal patch
+      in the training set.
+    p_val: A decimal probability of sampling each normal patch
+      in the validation set.
     seed: Integer random seed for NumPy.
   """
   # set numpy seed
@@ -384,12 +386,11 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
     # TODO: extract this out into a separate function
     train, val = train_test_split(lab_cases, train_size=train_size, test_size=1-train_size,
         random_state=seed)
-    train_args = ('train', train, translations_train, rotations_train, p_normal_train,
-        overlap_normal_train)
-    val_args = ('val', val, translations_val, rotations_val, p_normal_val, overlap_normal_val)
+    train_args = ('train', train, translations_train, rotations_train, p_train, stride_train)
+    val_args = ('val', val, translations_val, rotations_val, p_val, stride_val)
     for split_args in [train_args, val_args]:
       # generate samples for this split
-      split_name, cases, translations, rotations, p_normal, overlap_normal = split_args
+      split_name, cases, translations, rotations, p, stride = split_args
       for case in cases:
         case = "{:02d}".format(case)  # reformat case to zero-padded 2-character number
         case_path = os.path.join(images_path, case)
@@ -420,9 +421,9 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
           if not os.path.exists(save_path):
             os.makedirs(save_path)  # create if necessary
           mask = create_mask(h, w, coords, patch_size)
-          normal_coords_gen = gen_normal_coords(mask, patch_size, overlap_normal, overlap_threshold)
+          normal_coords_gen = gen_normal_coords(mask, patch_size, stride, overlap_threshold)
           # TODO: rotations & translations for normal patches
-          patch_gen = gen_patches(im, normal_coords_gen, patch_size, 0, 0, max_shift, p_normal)
+          patch_gen = gen_patches(im, normal_coords_gen, patch_size, 0, 0, max_shift, p)
           for patch, row, col, rot, row_shift, col_shift in patch_gen:
             save_patch(patch, save_path, lab, case, region, row, col, rot, row_shift, col_shift)
 
@@ -470,26 +471,32 @@ if __name__ == "__main__":
            "(default: %(default)s)")
   parser.add_argument("--max_shift", type=int,
       help="upper bound on the spatial shift range for the random translations "\
-           "(default: `int(patch_size/4)`)")
-  parser.add_argument("--p_normal_train", type=lambda x: check_float_range(x, 0, 1), default=1,
-      help="probability of sampling each normal patch in the training set (default: %(default)s)")
-  parser.add_argument("--p_normal_val", type=lambda x: check_float_range(x, 0, 1), default=1,
-      help="probability of sampling each normal patch in the validation set (default: %(default)s)")
-  # TODO: better names for the following three args
+           "(default: `round(patch_size/4)`)")
+  parser.add_argument("--stride_train", type=int,
+      help="number of pixels by which to shift in the sliding window for normal patches in the "\
+           "training set (default: `patch_size`)")
+  parser.add_argument("--stride_val", type=int,
+      help="number of pixels by which to shift in the sliding window for normal patches in the "\
+           "validation set (default: `patch_size`)")
   parser.add_argument("--overlap_threshold", type=lambda x: check_float_range(x, 0, 1),
       default=0.25, help="decimal inclusive upper bound on the percentage of overlap of normal "\
                          "patches with mitosis patches (default: %(default)s)")
-  parser.add_argument("--overlap_normal_train", type=int, default=0,
-      help="An integer number of pixels of overlap for normal patches in the training set "\
-           "(default: %(default)s)")
-  parser.add_argument("--overlap_normal_val", type=int, default=0,
-      help="An integer number of pixels of overlap for normal patches in the validation set "\
-           "(default: %(default)s)")
+  parser.add_argument("--p_train", type=lambda x: check_float_range(x, 0, 1), default=1,
+      help="probability of sampling each normal patch in the training set (default: %(default)s)")
+  parser.add_argument("--p_val", type=lambda x: check_float_range(x, 0, 1), default=1,
+      help="probability of sampling each normal patch in the validation set (default: %(default)s)")
   parser.add_argument("--seed", type=int, help="random seed for numpy (default: %(default)s)")
   args = parser.parse_args()
 
   # set any other defaults
-  max_shift = args.max_shift if args.max_shift is not None else int(args.patch_size/4)
+  if args.max_shift is None:
+    args.max_shift = round(args.patch_size/4)
+
+  if args.stride_train is None:
+    args.stride_train = args.patch_size
+
+  if args.stride_val is None:
+    args.stride_val = args.patch_size
 
   # save args to file in save folder
   if not os.path.exists(args.save_path):
@@ -503,8 +510,8 @@ if __name__ == "__main__":
   # preprocess!
   preprocess(args.images_path, args.labels_path, args.save_path, args.train_size, args.patch_size,
       args.rotations_train, args.rotations_val, args.translations_train, args.translations_val,
-      max_shift, args.p_normal_train, args.p_normal_val, args.overlap_threshold,
-      args.overlap_normal_train, args.overlap_normal_val, args.seed)
+      args.max_shift, args.stride_train, args.stride_val, args.overlap_threshold,
+      args.p_train, args.p_val, args.seed)
 
 
 # ---
@@ -681,48 +688,48 @@ def test_gen_dense_coords():
   h, w, c = 100, 200, 3
   im = np.random.rand(h, w, c)
   size = 32
-  overlap = 0
+  stride = size
 
   # check that it returns a generator object
-  assert isinstance(gen_dense_coords(h, w, size,  overlap), types.GeneratorType)
+  assert isinstance(gen_dense_coords(h, w, size,  stride), types.GeneratorType)
 
   # size error
   with pytest.raises(AssertionError):
-    next(gen_dense_coords(h, w, h+1, overlap))
+    next(gen_dense_coords(h, w, h+1, stride))
 
   # another size error
   with pytest.raises(AssertionError):
-    next(gen_dense_coords(h, w, 1, overlap))
+    next(gen_dense_coords(h, w, 1, stride))
 
-  # overlap error
+  # stride error
   with pytest.raises(AssertionError):
     next(gen_dense_coords(h, w, size, -1))
 
-  # another overlap error
+  # another stride error
   with pytest.raises(AssertionError):
-    next(gen_dense_coords(h, w, size, size))
+    next(gen_dense_coords(h, w, size, 0))
 
   # normal
-  row, col = next(gen_dense_coords(h, w, size, overlap))
+  row, col = next(gen_dense_coords(h, w, size, stride))
   assert 0 <= row <= h
   assert 0 <= col <= w
 
   # list of coords
-  coords = list(gen_dense_coords(h, w, size, overlap))
+  coords = list(gen_dense_coords(h, w, size, stride))
   assert len(coords) > 0
 
-  # check that overlap >0 produces more coordinates
-  coords2 = list(gen_dense_coords(h, w, size, size-1))
+  # check that stride < size produces more coordinates
+  coords2 = list(gen_dense_coords(h, w, size, 1))
   assert len(coords2) > len(coords)
 
   # check for correct centered coordinates
   h = 6
   w = 8
   size = 4
-  overlap = 2
+  stride = size - 2
   correct_coords = [(2, 2), (2, 4), (2, 6),
                     (4, 2), (4, 4), (4, 6)]
-  coords = list(gen_dense_coords(h, w, size, overlap))
+  coords = list(gen_dense_coords(h, w, size, stride))
   assert coords == correct_coords
 
 
@@ -735,65 +742,65 @@ def test_gen_normal_coords():
   size = 32
   p = 0.6
   threshold = 0.25
-  overlap = 0
+  stride = size
   mask = np.zeros((h, w), dtype=bool)
   mask[0:size, 0:size] = True
 
   # check that it returns a generator object
-  assert isinstance(gen_normal_coords(mask, size, overlap, threshold), types.GeneratorType)
+  assert isinstance(gen_normal_coords(mask, size, stride, threshold), types.GeneratorType)
 
   # mask shape error
   with pytest.raises(AssertionError):
-    next(gen_normal_coords(np.zeros((h, w, 3)), size, overlap, threshold))
+    next(gen_normal_coords(np.zeros((h, w, 3)), size, stride, threshold))
 
   # size error
   with pytest.raises(AssertionError):
-    next(gen_normal_coords(mask, h+1, overlap, threshold))
+    next(gen_normal_coords(mask, h+1, stride, threshold))
 
   # another size error
   with pytest.raises(AssertionError):
-    next(gen_normal_coords(mask, 1, overlap, threshold))
+    next(gen_normal_coords(mask, 1, stride, threshold))
 
-  # overlap error
+  # stride error
   with pytest.raises(AssertionError):
     next(gen_normal_coords(mask, size, -1, threshold))
 
-  # another overlap error
+  # another stride error
   with pytest.raises(AssertionError):
-    next(gen_normal_coords(mask, size, size, threshold))
+    next(gen_normal_coords(mask, size, 0, threshold))
 
   # threshold error
   with pytest.raises(AssertionError):
-    next(gen_normal_coords(mask, size, overlap, -1))
+    next(gen_normal_coords(mask, size, stride, -1))
 
   # another threshold error
   with pytest.raises(AssertionError):
-    next(gen_normal_coords(mask, size, overlap, 2))
+    next(gen_normal_coords(mask, size, stride, 2))
 
   # normal
-  row, col = next(gen_normal_coords(mask, size, overlap, threshold))
+  row, col = next(gen_normal_coords(mask, size, stride, threshold))
   assert 0 <= row <= h
   assert 0 <= col <= w
 
   # list of coords
-  coords = list(gen_normal_coords(mask, size, overlap, threshold))
+  coords = list(gen_normal_coords(mask, size, stride, threshold))
   assert len(coords) > 0
 
   # check for correct coords
   h = 6
   w = 8
   size = 4
-  overlap = 2
+  stride = size - 2
   threshold = 0.25
   mask = np.zeros((h, w), dtype=bool)
   mask[0:size, 0:size] = True
   correct_coords = [(2, 6), (4, 4), (4, 6)]
-  coords = list(gen_normal_coords(mask, size, overlap, threshold))
+  coords = list(gen_normal_coords(mask, size, stride, threshold))
   assert coords == correct_coords
 
   # check for situations in which no normal patches should be generated
   # - too much mitosis overlap
-  coords = list(gen_normal_coords(np.ones((100, 100)), 100, overlap, 0))
+  coords = list(gen_normal_coords(np.ones((100, 100)), 100, stride, 0))
   assert len(coords) == 0
 
 
@@ -817,11 +824,6 @@ def test_gen_random_translation():
   # max_shift error
   with pytest.raises(AssertionError):
     row, col, max_shift = 1, 1, -1
-    gen_random_translation(h, w, row, col, max_shift)
-
-  # another max_shift error
-  with pytest.raises(AssertionError):
-    row, col, max_shift = 1, 1, 0
     gen_random_translation(h, w, row, col, max_shift)
 
   # row, col, size on boundary
@@ -873,8 +875,6 @@ def test_gen_patches():
   im = np.random.rand(h, w, c).astype(np.uint8)
   coords = [(2, 6), (4, 4), (4, 6)]
   size = 4
-  overlap = 2
-  threshold = 0.25
   rotations = 2
   translations = 2
   max_shift = 2
@@ -902,7 +902,7 @@ def test_gen_patches():
 
   # max shift error
   with pytest.raises(AssertionError):
-    next(gen_patches(im, coords, size, rotations, translations, 0, p))
+    next(gen_patches(im, coords, size, rotations, translations, -1, p))
 
   # prob error
   with pytest.raises(AssertionError):
