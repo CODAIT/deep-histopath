@@ -347,6 +347,16 @@ def train(train_path, val_path, exp_path, model_name, patch_size, batch_size, cl
     probs = tf.nn.sigmoid(logits, name="probs")
     preds = tf.round(probs, name="preds")
 
+    # false-positive & false-negative cases
+    pos_preds_mask = tf.cast(tf.squeeze(preds, axis=1), tf.bool)
+    neg_preds_mask = tf.logical_not(pos_preds_mask)
+    fp_mask = tf.logical_and(pos_preds_mask, neg_mask)
+    fn_mask = tf.logical_and(neg_preds_mask, pos_mask)
+    fp_images = tf.boolean_mask(images, fp_mask)
+    fn_images = tf.boolean_mask(images, fn_mask)
+    fp_filenames = tf.boolean_mask(filenames, fp_mask)
+    fn_filenames = tf.boolean_mask(filenames, fn_mask)
+
   # loss
   with tf.name_scope("loss"):
     loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
@@ -403,9 +413,13 @@ def train(train_path, val_path, exp_path, model_name, patch_size, batch_size, cl
   with tf.name_scope("images"):
     tf.summary.image("mitosis", mitosis_images, 1, collections=["minibatch"])
     tf.summary.image("normal", normal_images, 1, collections=["minibatch"])
+    tf.summary.image("false-positive", fp_images, 1, collections=["minibatch"])
+    tf.summary.image("false-negative", fn_images, 1, collections=["minibatch"])
   with tf.name_scope("data/filenames"):
     tf.summary.text("mitosis", mitosis_filenames, collections=["minibatch"])
     tf.summary.text("normal", normal_filenames, collections=["minibatch"])
+    tf.summary.text("false-positive", fp_filenames, collections=["minibatch"])
+    tf.summary.text("false-negative", fn_filenames, collections=["minibatch"])
   tf.summary.histogram("data/images", images, collections=["minibatch"])
   tf.summary.histogram("data/labels", labels, collections=["minibatch"])
   for layer in model.layers:
