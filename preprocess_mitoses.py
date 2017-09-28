@@ -4,9 +4,12 @@ import math
 import os
 import shutil
 
+from keras.models import load_model
 import numpy as np
 from PIL import Image
 from sklearn.model_selection import train_test_split
+
+from train_mitoses import normalize
 
 
 def create_mask(h, w, coords, size):
@@ -164,6 +167,39 @@ def gen_normal_coords(mask, size, stride, threshold):
       yield row, col
 
 
+def gen_fp_coords(im, normal_coords, size, model, model_name, pred_threshold):
+  """Generate (row, col) coordinates for false-positive patches.
+
+  This generates false-positive patch coordinates by making predictions
+  for each normal patch and yielding coordinates for cases in which the
+  predicted value is greater than `pred_threshold`.  Note: by having the
+  threshold be a parameter, the model can output the actual probability
+  value or the logit value and as long as the threshold is set
+  appropriately it doesn't matter (i.e., for a probability threshold of
+  0.5, the corresponding logit threshold would be 0).
+
+  Args:
+    im: An image stored as a np.uint8 NumPy array of shape (h, w, c) with
+      values in [0, 255].
+    normal_coords: An iterable collection of (row, col) coordinates.
+    size: An integer size of the square patch to extract.
+    model: Keras model to use for false-positive oversampling.
+    model_name: String indicating the model being used, which is used
+      for determining the correct normalization.  TODO: replace this
+    pred_threshold: Decimal threshold over which the patch is predicted
+      as a positive case.
+
+  Returns:
+    Yields (row, col) coordinates of false-positive patches.
+  """
+  for row, col in normal_coords:
+    patch = extract_patch(im, row, col, size)
+    norm_patch = normalize(patch / 255, model_name)
+    out = model.predict_on_batch(np.expand_dims(norm_patch, 0))[0]
+    if out > pred_threshold:
+      yield row, col
+
+
 def gen_random_translation(h, w, row, col, max_shift):
   """Generate (row_shift, col_shift) random translation shifts relative
   to (row, col).
@@ -199,8 +235,8 @@ def gen_patches(im, coords, size, rotations, translations, max_shift, p):
 
   For every set of (row, col) coordinates in `coords`, this function
   yields centered patches sampled with probability `p`, possibly with a
-  combination of some number of rotations evenly-spaced in [0, 180],
-  and some number of random translations per rotation.
+  combination of some number of rotations evenly-spaced in [0, 180], and
+  some number of random translations per rotation.
 
   NOTE: This function will internally create an uint8 version of `im`
   in order to use PIL to rotate the image.  It will yield patches
@@ -227,7 +263,7 @@ def gen_patches(im, coords, size, rotations, translations, max_shift, p):
     & col_shift are relative translations from row, col applied after
     the rotation.
   """
-  # check that size is within the mask bounds
+  # check that size is within the image bounds
   assert np.ndim(im) == 3, "image must be of shape (h, w, c)"
   h, w, c = im.shape
   assert 1 < size <= min(h, w), "size must be > 1 and within the bounds of the image"
@@ -318,7 +354,8 @@ def save_patch(patch, path, lab, case, region, row, col, rotation, row_shift, co
 
 def preprocess(images_path, labels_path, base_save_path, train_size, patch_size, rotations_train,
     rotations_val, translations_train, translations_val, max_shift, stride_train, stride_val,
-    overlap_threshold, p_train, p_val, seed=None):
+    overlap_threshold, p_train, p_val, model=None, model_name=None, pred_threshold=None,
+    fp_rotations=None, fp_translations=None, seed=None):
   """Generate a mitosis detection patch dataset.
 
   This generates train/val datasets of mitosis/normal image patches for
@@ -326,13 +363,14 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
   with centers at the given coordinates, along with random rotations
   and translations from those coordinates.  Normal patches will be
   extracted in a sliding window fashion with the given stride, possibly
-  overlapping with mitosis patches up to some given threshold.  The
-  train/val split will be performed on overall cases, stratified by lab.
-  I.e., the cases from each lab will be separately split into training
-  and validation sets, and then the associated sets will be combined at
-  the end.  In order to support adversarial training, the generated
-  patch filenames will each contain information about the laboratory
-  and case from which the patch originated.
+  overlapping with mitosis patches up to some given threshold, and
+  optionally with false-positive oversampling.  The train/val split will
+  be performed on overall cases, stratified by lab.  I.e., the cases
+  from each lab will be separately split into training and validation
+  sets, and then the associated sets will be combined at the end.  In
+  order to support adversarial training, the generated patch filenames
+  will each contain information about the laboratory and case from which
+  the patch originated.
 
   Args:
     images_path: Path to folder that contains the mitosis training
@@ -368,6 +406,17 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
       in the training set.
     p_val: A decimal probability of sampling each normal patch
       in the validation set.
+    model: Optional Keras model to use for false-positive oversampling.
+    model_name: String indicating the model being used, which is used
+      for determining the correct normalization.  TODO: replace this
+    pred_threshold: Decimal threshold over which the patch is predicted as a
+      positive case.
+    fp_rotations: Integer number of evenly-spaced rotation augmented
+      patches to extract for each false-positive patch in the training
+      set, in addition to the centered patch.
+    fp_translations: Integer number of random translation
+      augmented patches to extract for each rotated false-positive patch
+      in the training set, in addition to the centered rotated patch.
     seed: Integer random seed for NumPy.
   """
   # set numpy seed
@@ -398,7 +447,7 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
         for region_im in region_ims:  # a single case may have many available regions
           region, ext = region_im.split('.')  # region number, image file extension
           region_im_path = os.path.join(case_path, region_im)
-          im = np.array(Image.open(region_im_path))  # get region image
+          im = np.array(Image.open(region_im_path))  # get region image in np.uint8 format
           h, w, c = im.shape
           coords_path = os.path.join(labels_path, case, "{}.csv".format(region))
           if os.path.isfile(coords_path):
@@ -421,8 +470,20 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
           if not os.path.exists(save_path):
             os.makedirs(save_path)  # create if necessary
           mask = create_mask(h, w, coords, patch_size)
-          normal_coords_gen = gen_normal_coords(mask, patch_size, stride, overlap_threshold)
+          # optional false_positive oversampling
+          if model is not None and split_name == "train":
+            # oversample all false-positive cases in the training set
+            normal_coords_gen = gen_normal_coords(mask, patch_size, stride, overlap_threshold)
+            fp_coords_gen = gen_fp_coords(im, normal_coords_gen, patch_size, model, model_name,
+                pred_threshold)
+            fp_patch_gen = gen_patches(im, fp_coords_gen, patch_size, fp_rotations, fp_translations,
+                max_shift, 1)
+            for patch, row, col, rot, row_shift, col_shift in fp_patch_gen:
+              save_patch(patch, save_path, lab, case, region, row, col, rot, row_shift, col_shift)
+          # regular sampling for normal cases
+          # NOTE: This may sample the false-positive patches again, but that's fine for now
           # TODO: rotations & translations for normal patches
+          normal_coords_gen = gen_normal_coords(mask, patch_size, stride, overlap_threshold)
           patch_gen = gen_patches(im, normal_coords_gen, patch_size, 0, 0, max_shift, p)
           for patch, row, col, rot, row_shift, col_shift in patch_gen:
             save_patch(patch, save_path, lab, case, region, row, col, rot, row_shift, col_shift)
@@ -485,6 +546,21 @@ if __name__ == "__main__":
       help="probability of sampling each normal patch in the training set (default: %(default)s)")
   parser.add_argument("--p_val", type=lambda x: check_float_range(x, 0, 1), default=1,
       help="probability of sampling each normal patch in the validation set (default: %(default)s)")
+  parser.add_argument("--model_path",
+      help="path to a Keras model to use for false-positive oversampling (default: %(default)s)")
+  # TODO: replace this with unified normalization flag used here and for training
+  parser.add_argument("--model_name",
+      help="name of the model being used, which is used for determining the correct normalization "\
+           "(default: %(default)s)")
+  parser.add_argument("--pred_threshold", type=float, default=0,
+      help="threshold over which the patch is predicted as a positive case (default: %(default)s)")
+  parser.add_argument("--fp_rotations", type=int, default=5,
+      help="number of evenly-spaced rotation augmented patches to extract for each false-positive "\
+           "patch in the training set, in addition to the centered patch (default: %(default)s)")
+  parser.add_argument("--fp_translations", type=int, default=5,
+      help="number of random translation augmented patches to extract for each rotated "\
+           "false-positive patch in the training set, in addition to the centered rotated patch "\
+           "(default: %(default)s)")
   parser.add_argument("--seed", type=int, help="random seed for numpy (default: %(default)s)")
   args = parser.parse_args()
 
@@ -507,11 +583,18 @@ if __name__ == "__main__":
   # copy this script to the base save folder
   shutil.copy2(os.path.realpath(__file__), args.save_path)
 
+  # load model for false-positive oversampling
+  if args.model_path is not None:
+    model = load_model(args.model_path)
+  else:
+    model = None
+
   # preprocess!
   preprocess(args.images_path, args.labels_path, args.save_path, args.train_size, args.patch_size,
       args.rotations_train, args.rotations_val, args.translations_train, args.translations_val,
-      args.max_shift, args.stride_train, args.stride_val, args.overlap_threshold,
-      args.p_train, args.p_val, args.seed)
+      args.max_shift, args.stride_train, args.stride_val, args.overlap_threshold, args.p_train,
+      args.p_val, model, args.model_name, args.pred_threshold, args.fp_rotations,
+      args.fp_translations, args.seed)
 
 
 # ---
