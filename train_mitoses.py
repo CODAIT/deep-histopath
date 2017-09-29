@@ -106,6 +106,27 @@ def normalize(image, model_name):
   return image
 
 
+def unnormalize(image, model_name):
+  """Unnormalize an image.
+
+  Args:
+    image: A Tensor of shape (...,h,w,c) with normalized values.
+    model_name: String indicating the model to use.
+
+  Returns:
+    An unnormalized image Tensor of shape (...,h,w,c) with values in
+      [0, 1].
+  """
+  if model_name in ("vgg", "resnet"):
+    image = image + [103.939, 116.779, 123.68]  # mean centering using imagenet means
+    image = image[..., ::-1]  # bgr -> rgb
+    image = image / 255.0  # float32 in [0, 1]
+  else:
+    image = image / 2.
+    image = image + 0.5
+  return image
+
+
 def augment(image):
   """Apply random data augmentation to the given image.
 
@@ -120,10 +141,10 @@ def augment(image):
   # Detecting Cancer Metastases on Gigapixel Pathology Images. arXiv.org. 2017.
   image = tf.image.random_flip_up_down(image)
   image = tf.image.random_flip_left_right(image)
-  #image = tf.image.random_brightness(image, 64/255)
-  #image = tf.image.random_contrast(image, 0, 0.75)
-  #image = tf.image.random_saturation(image, 0, 0.25)
-  #image = tf.image.random_hue(image, 0.04)
+  image = tf.image.random_brightness(image, 64/255)
+  image = tf.image.random_contrast(image, 0.25, 1)
+  image = tf.image.random_saturation(image, 0.75, 1)
+  image = tf.image.random_hue(image, 0.04)
   return image
 
 
@@ -411,10 +432,14 @@ def train(train_path, val_path, exp_path, model_name, patch_size, batch_size, cl
   # earlier. otherwise, a numeric suffix will be appended to the name.
   # general minibatch summaries
   with tf.name_scope("images"):
-    tf.summary.image("mitosis", mitosis_images, 1, collections=["minibatch"])
-    tf.summary.image("normal", normal_images, 1, collections=["minibatch"])
-    tf.summary.image("false-positive", fp_images, 1, collections=["minibatch"])
-    tf.summary.image("false-negative", fn_images, 1, collections=["minibatch"])
+    tf.summary.image("mitosis", unnormalize(mitosis_images, model_name), 1,
+        collections=["minibatch"])
+    tf.summary.image("normal", unnormalize(normal_images, model_name), 1,
+        collections=["minibatch"])
+    tf.summary.image("false-positive", unnormalize(fp_images, model_name), 1,
+        collections=["minibatch"])
+    tf.summary.image("false-negative", unnormalize(fn_images, model_name), 1,
+        collections=["minibatch"])
   with tf.name_scope("data/filenames"):
     tf.summary.text("mitosis", mitosis_filenames, collections=["minibatch"])
     tf.summary.text("normal", normal_filenames, collections=["minibatch"])

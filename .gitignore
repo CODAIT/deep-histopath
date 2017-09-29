@@ -1,5 +1,4 @@
 data
-.idea
+experiments
 *.zip
-__pycache__/
 
