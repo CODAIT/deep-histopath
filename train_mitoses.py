@@ -25,7 +25,7 @@ def get_label(filename):
 
   Returns:
     TensorFlow float binary label equal to 1 for mitosis or 0 for
-      normal.
+    normal.
   """
   # note file name format:
   # lab is a single digit, case and region are two digits with padding if needed
@@ -115,7 +115,7 @@ def unnormalize(image, model_name):
 
   Returns:
     An unnormalized image Tensor of shape (...,h,w,c) with values in
-      [0, 1].
+    [0, 1].
   """
   if model_name in ("vgg", "resnet"):
     image = image + [103.939, 116.779, 123.68]  # mean centering using imagenet means
@@ -127,11 +127,12 @@ def unnormalize(image, model_name):
   return image
 
 
-def augment(image):
+def augment(image, seed=None):
   """Apply random data augmentation to the given image.
 
   Args:
     image: A Tensor of shape (h,w,c).
+    seed: An integer used to create a random seed.
 
   Returns:
     A data-augmented image.
@@ -139,13 +140,50 @@ def augment(image):
   # NOTE: these values currently come from the Google pathology paper:
   # Liu Y, Gadepalli K, Norouzi M, Dahl GE, Kohlberger T, Boyko A, et al.
   # Detecting Cancer Metastases on Gigapixel Pathology Images. arXiv.org. 2017.
-  image = tf.image.random_flip_up_down(image)
-  image = tf.image.random_flip_left_right(image)
-  image = tf.image.random_brightness(image, 64/255)
-  image = tf.image.random_contrast(image, 0.25, 1)
-  image = tf.image.random_saturation(image, 0.75, 1)
-  image = tf.image.random_hue(image, 0.04)
+  image = tf.image.random_flip_up_down(image, seed=seed)
+  image = tf.image.random_flip_left_right(image, seed=seed)
+  image = tf.image.random_brightness(image, 64/255, seed=seed)
+  image = tf.image.random_contrast(image, 0.25, 1, seed=seed)
+  image = tf.image.random_saturation(image, 0.75, 1, seed=seed)
+  image = tf.image.random_hue(image, 0.04, seed=seed)
   return image
+
+
+def create_augmented_batch(image, batch_size):
+  """Create a batch of augmented versions of the given image.
+
+  This will sample `batch_size/4` augmented images deterministically,
+  and yield four rotated variants for each augmented image (0, 90, 180,
+  270 degrees).
+
+  Args:
+    image: A Tensor of shape (h,w,c).
+    batch_size: Number of augmented versions to generate.
+
+  Returns:
+    A Tensor containing a batch of `batch_size` data-augmented versions
+    of the given image.
+  """
+  assert batch_size % 4 == 0 or batch_size == 1, "batch_size must be 1 or divisible by 4"
+
+  def rots_batch(image):
+    rot0 = image
+    rot90 = tf.image.rot90(image)
+    rot180 = tf.image.rot90(image, k=2)
+    rot270 = tf.image.rot90(image, k=3)
+    rots = tf.stack([rot0, rot90, rot180, rot270])
+    return rots
+
+  if batch_size >= 4:
+    images = rots_batch(image)
+    for i in range(round(batch_size/4)-1):
+      aug_image = augment(image, i)
+      aug_image_rots = rots_batch(aug_image)
+      images = tf.concat([images, aug_image_rots], axis=0)
+  else:
+    images = tf.expand_dims(image, 0)
+
+  return images
 
 
 def create_reset_metric(metric, scope, **metric_kwargs):  # prob safer to only allow kwargs
@@ -216,9 +254,9 @@ def initialize_variables(sess):
   return global_step, global_epoch
 
 
-def train(train_path, val_path, exp_path, model_name, patch_size, batch_size, clf_epochs,
-    finetune_epochs, clf_lr, finetune_lr, finetune_momentum, finetune_layers, l2, augmentation,
-    log_interval, threads, checkpoint, resume):
+def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_size, val_batch_size,
+    clf_epochs, finetune_epochs, clf_lr, finetune_lr, finetune_momentum, finetune_layers, l2,
+    augmentation, marginalization, log_interval, threads, checkpoint, resume):
   """Train a model.
 
   Args:
@@ -231,7 +269,8 @@ def train(train_path, val_path, exp_path, model_name, patch_size, batch_size, cl
     model_name: String indicating the model to use.
     patch_size: Integer length to which the square patches will be
       resized.
-    batch_size: Integer batch size.
+    train_batch_size: Integer training batch size.
+    val_batch_size: Integer validation batch size.
     clf_epochs: Integer number of epochs for which to training the new
       classifier layers.
     finetune_epochs: Integer number of epochs for which to fine-tune the
@@ -245,6 +284,14 @@ def train(train_path, val_path, exp_path, model_name, patch_size, batch_size, cl
     l2: Float L2 global regularization value.
     augmentation: Boolean for whether or not to apply random augmentation
       to the image.
+    marginalization: Boolean for whether or not to use noise
+      marginalization when evaluating the validation set.  If True, then
+      each image in the validation set will be expanded to a batch of
+      augmented versions of that image, and predicted probabilities for
+      each batch will be averaged to yield a single noise-marginalized
+      prediction for each image.  Note: if this is True, then
+      `val_batch_size` must be divisible by 4, or equal to 1 for a
+      special debugging case of no augmentation.
     log_interval: Integer number of steps between logging during
       training.
     threads: Integer number of threads for dataset buffering.
@@ -266,13 +313,22 @@ def train(train_path, val_path, exp_path, model_name, patch_size, batch_size, cl
     # TODO: add data augmentation function
     train_dataset = (tf.contrib.data.Dataset.list_files('{}/*/*.jpg'.format(train_path))
         .shuffle(500000)
-        .map(lambda x: preprocess(x, patch_size, augmentation, model_name), num_threads=threads,
-          output_buffer_size=100*batch_size)
-        .batch(batch_size))
-    val_dataset = (tf.contrib.data.Dataset.list_files('{}/*/*.jpg'.format(val_path))
-        .map(lambda x: preprocess(x, patch_size, False, model_name), num_threads=threads,
-          output_buffer_size=100*batch_size)
-        .batch(batch_size))
+        .map(lambda filename: preprocess(filename, patch_size, augmentation, model_name),
+          num_threads=threads, output_buffer_size=100*train_batch_size)
+        .batch(train_batch_size))
+    if marginalization:
+      val_dataset = (tf.contrib.data.Dataset.list_files('{}/*/*.jpg'.format(val_path))
+          .map(lambda filename: preprocess(filename, patch_size, False, model_name))
+          .map(lambda image, label, filename:
+              (create_augmented_batch(image, val_batch_size),
+               tf.tile(tf.expand_dims(label, -1), [val_batch_size]),
+               tf.tile(tf.expand_dims(filename, -1), [val_batch_size])),
+            num_threads=threads, output_buffer_size=25*val_batch_size))
+    else:
+      val_dataset = (tf.contrib.data.Dataset.list_files('{}/*/*.jpg'.format(val_path))
+          .map(lambda filename: preprocess(filename, patch_size, False, model_name),
+            num_threads=threads, output_buffer_size=100*val_batch_size)
+          .batch(val_batch_size))
 
     iterator = tf.contrib.data.Iterator.from_structure(train_dataset.output_types,
                                                        train_dataset.output_shapes)
@@ -365,8 +421,15 @@ def train(train_path, val_path, exp_path, model_name, patch_size, batch_size, cl
     # NOTE: preds has an implicit threshold at 0.5
     #logits = model(images)
     logits = model.output
+    # use noise marginalization at test time, i.e., average predictions over a batch of augmented
+    # versions of a single image
+    avg_logits = tf.reduce_mean(logits, axis=0, keep_dims=True, name="avg_logits")
+    logits = tf.cond(tf.logical_and(marginalization, tf.logical_not(K.learning_phase())),
+        lambda: avg_logits, lambda: logits)
     probs = tf.nn.sigmoid(logits, name="probs")
     preds = tf.round(probs, name="preds")
+
+    num_preds = tf.shape(preds)[0]
 
     # false-positive & false-negative cases
     pos_preds_mask = tf.cast(tf.squeeze(preds, axis=1), tf.bool)
@@ -380,6 +443,9 @@ def train(train_path, val_path, exp_path, model_name, patch_size, batch_size, cl
 
   # loss
   with tf.name_scope("loss"):
+    # use noise marginalization at test time
+    labels = tf.cond(tf.logical_and(marginalization, tf.logical_not(K.learning_phase())),
+        lambda: labels[0], lambda: labels)
     loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
       labels=tf.reshape(labels, [-1, 1]), logits=logits))
 
@@ -433,20 +499,20 @@ def train(train_path, val_path, exp_path, model_name, patch_size, batch_size, cl
   # general minibatch summaries
   with tf.name_scope("images"):
     tf.summary.image("mitosis", unnormalize(mitosis_images, model_name), 1,
-        collections=["minibatch"])
+        collections=["minibatch", "minibatch_val"])
     tf.summary.image("normal", unnormalize(normal_images, model_name), 1,
-        collections=["minibatch"])
+        collections=["minibatch", "minibatch_val"])
     tf.summary.image("false-positive", unnormalize(fp_images, model_name), 1,
-        collections=["minibatch"])
+        collections=["minibatch", "minibatch_val"])
     tf.summary.image("false-negative", unnormalize(fn_images, model_name), 1,
-        collections=["minibatch"])
+        collections=["minibatch", "minibatch_val"])
   with tf.name_scope("data/filenames"):
-    tf.summary.text("mitosis", mitosis_filenames, collections=["minibatch"])
-    tf.summary.text("normal", normal_filenames, collections=["minibatch"])
-    tf.summary.text("false-positive", fp_filenames, collections=["minibatch"])
-    tf.summary.text("false-negative", fn_filenames, collections=["minibatch"])
-  tf.summary.histogram("data/images", images, collections=["minibatch"])
-  tf.summary.histogram("data/labels", labels, collections=["minibatch"])
+    tf.summary.text("mitosis", mitosis_filenames, collections=["minibatch", "minibatch_val"])
+    tf.summary.text("normal", normal_filenames, collections=["minibatch", "minibatch_val"])
+    tf.summary.text("false-positive", fp_filenames, collections=["minibatch", "minibatch_val"])
+    tf.summary.text("false-negative", fn_filenames, collections=["minibatch", "minibatch_val"])
+  tf.summary.histogram("data/images", images, collections=["minibatch", "minibatch_val"])
+  tf.summary.histogram("data/labels", labels, collections=["minibatch", "minibatch_val"])
   for layer in model.layers:
     for weight in layer.weights:
       tf.summary.histogram(weight.name, weight, collections=["minibatch"])
@@ -457,11 +523,15 @@ def train(train_path, val_path, exp_path, model_name, patch_size, batch_size, cl
   tf.summary.histogram("model/preds", preds, collections=["minibatch"])
   with tf.name_scope("minibatch"):
     tf.summary.scalar("loss", loss, collections=["minibatch"])
-    tf.summary.scalar("batch_size", actual_batch_size, collections=["minibatch"])
+    tf.summary.scalar("batch_size", actual_batch_size, collections=["minibatch", "minibatch_val"])
+    tf.summary.scalar("num_preds", num_preds, collections=["minibatch", "minibatch_val"])
     tf.summary.scalar("percent_positive", percent_pos, collections=["minibatch"])
+    tf.summary.scalar("learning_phase", tf.to_int32(K.learning_phase()),
+        collections=["minibatch", "minibatch_val"])
   # TODO: gradient histograms
   # TODO: first layer convolution kernels as images
   minibatch_summaries = tf.summary.merge_all("minibatch")
+  minibatch_val_summaries = tf.summary.merge_all("minibatch_val")
 
   # epoch summaries
   with tf.name_scope("epoch"):
@@ -504,11 +574,11 @@ def train(train_path, val_path, exp_path, model_name, patch_size, batch_size, cl
         try:
           if log_interval > 0 and global_step % log_interval == 0:
             # train, update metrics, & log stuff
-            _, _, loss_val, mean_loss_val, acc_val, summary_str = sess.run([train_op,
-                metric_update_ops, loss, mean_loss, acc, minibatch_summaries],
+            _, _, loss_val, mean_loss_val, f1_val, summary_str = sess.run([train_op,
+                metric_update_ops, loss, mean_loss, f1, minibatch_summaries],
                 feed_dict={K.learning_phase(): 1})
             train_writer.add_summary(summary_str, global_step)
-            print("train", global_epoch, global_step, loss_val, mean_loss_val, acc_val)
+            print("train", global_epoch, global_step, loss_val, mean_loss_val, f1_val)
           else:
             # train & update metrics
             _, _ = sess.run([train_op, metric_update_ops], feed_dict={K.learning_phase(): 1})
@@ -516,9 +586,9 @@ def train(train_path, val_path, exp_path, model_name, patch_size, batch_size, cl
         except tf.errors.OutOfRangeError:
           break
       # log average training metrics for epoch & reset
-      mean_loss_val, acc_val, summary_str = sess.run([mean_loss, acc, epoch_summaries])
-      print("---epoch {}, train avg loss: {}, train acc: {}".format(global_epoch, mean_loss_val,
-          acc_val))
+      mean_loss_val, f1_val, summary_str = sess.run([mean_loss, f1, epoch_summaries])
+      print("---epoch {}, train avg loss: {}, train f1: {}".format(global_epoch, mean_loss_val,
+          f1_val))
       train_writer.add_summary(summary_str, global_epoch)
       sess.run(metric_reset_ops)
 
@@ -529,18 +599,18 @@ def train(train_path, val_path, exp_path, model_name, patch_size, batch_size, cl
         try:
           # evaluate & update metrics
           if log_interval > 0 and vi % log_interval == 0:
-            _, loss_val, mean_loss_val, acc_val = sess.run([metric_update_ops, loss, mean_loss,
-                acc], feed_dict={K.learning_phase(): 0})
-            print("val", global_epoch, vi, loss_val, mean_loss_val, acc_val)
+            _, loss_val, mean_loss_val, f1_val, summary_str = sess.run([metric_update_ops, loss,
+                mean_loss, f1, minibatch_val_summaries], feed_dict={K.learning_phase(): 0})
+            print("val", global_epoch, vi, loss_val, mean_loss_val, f1_val)
+            val_writer.add_summary(summary_str, vi)
           else:
             _ = sess.run(metric_update_ops, feed_dict={K.learning_phase(): 0})
           vi += 1
         except tf.errors.OutOfRangeError:
           break
       # log average validation metrics for epoch & reset
-      mean_loss_val, acc_val, summary_str = sess.run([mean_loss, acc, epoch_summaries])
-      print("---epoch {}, val avg loss: {}, val acc: {}".format(global_epoch, mean_loss_val,
-          acc_val))
+      mean_loss_val, f1_val, summary_str = sess.run([mean_loss, f1, epoch_summaries])
+      print("---epoch {}, val avg loss: {}, val f1: {}".format(global_epoch, mean_loss_val, f1_val))
       val_writer.add_summary(summary_str, global_epoch)
       sess.run(metric_reset_ops)
 
@@ -551,9 +621,8 @@ def train(train_path, val_path, exp_path, model_name, patch_size, batch_size, cl
 
       # save model
       if checkpoint:
-        # TODO: save model with sigmoid function appended
         keras_filename = os.path.join(exp_path,
-            f"{acc_val:.5}_acc_{mean_loss_val:.5}_loss_{global_epoch}_epoch_model.hdf5")
+            f"{f1_val:.5}_f1_{mean_loss_val:.5}_loss_{global_epoch}_epoch_model.hdf5")
         model.save(keras_filename, include_optimizer=False)  # keras model
         saver.save(sess, checkpoint_filename)  # full TF graph
         with open(global_step_epoch_filename, "wb") as f:
@@ -578,8 +647,10 @@ if __name__ == "__main__":
       help="name of the model to use in ['logreg', 'vgg', 'resnet'] (default: %(default)s)")
   parser.add_argument("--patch_size", type=int, default=64,
       help="integer length to which the square patches will be resized (default: %(default)s)")
-  parser.add_argument("--batch_size", type=int, default=32,
-      help="batch size (default: %(default)s)")
+  parser.add_argument("--train_batch_size", type=int, default=32,
+      help="training batch size (default: %(default)s)")
+  parser.add_argument("--val_batch_size", type=int, default=32,
+      help="validation batch size (default: %(default)s)")
   parser.add_argument("--clf_epochs", type=int, default=1,
       help="number of epochs for which to train the new classifier layers "\
            "(default: %(default)s)")
@@ -603,6 +674,10 @@ if __name__ == "__main__":
   augment_parser.add_argument("--no_augment", dest="augment", action="store_false",
       help="do not apply random augmentation to the training images (default: False)")
   parser.set_defaults(augment=True)
+  parser.add_argument("--marginalize", default=False, action="store_true",
+      help="use noise marginalization when evaluating the validation set. if this is set, then " \
+           "the validation batch_size must be divisible by 4, or equal to 1 for no augmentation "\
+           "(default: %(default)s)")
   parser.add_argument("--log_interval", type=int, default=100,
       help="number of steps between logging during training (default: %(default)s)")
   parser.add_argument("--threads", type=int, default=5,
@@ -625,10 +700,11 @@ if __name__ == "__main__":
   if args.exp_name == None:
     date = datetime.strftime(datetime.today(), "%y%m%d_%H%M%S")
     args.exp_name = f"{date}_{args.model_name}_patch_size_{args.patch_size}_batch_size_"\
-                    f"{args.batch_size}_clf_epochs_{args.clf_epochs}_finetune_epochs_"\
+                    f"{args.train_batch_size}_clf_epochs_{args.clf_epochs}_finetune_epochs_"\
                     f"{args.finetune_epochs}_clf_lr_{args.clf_lr}_finetune_lr_{args.finetune_lr}_"\
                     f"finetune_momentum_{args.finetune_momentum}_"\
-                    f"finetune_layers_{args.finetune_layers}_l2_{args.l2}_aug_{args.augment}"
+                    f"finetune_layers_{args.finetune_layers}_l2_{args.l2}_aug_{args.augment}_"\
+                    f"marg_{args.marginalize}"
   exp_path = os.path.join(args.exp_parent_path, args.exp_name)
 
   # make an experiment folder
@@ -644,10 +720,10 @@ if __name__ == "__main__":
   shutil.copy2(os.path.realpath(__file__), exp_path)
 
   # train!
-  train(train_path, val_path, exp_path, args.model_name, args.patch_size, args.batch_size,
-      args.clf_epochs, args.finetune_epochs, args.clf_lr, args.finetune_lr, args.finetune_momentum,
-      args.finetune_layers, args.l2, args.augment, args.log_interval, args.threads, args.checkpoint,
-      args.resume)
+  train(train_path, val_path, exp_path, args.model_name, args.patch_size, args.train_batch_size,
+      args.val_batch_size, args.clf_epochs, args.finetune_epochs, args.clf_lr, args.finetune_lr,
+      args.finetune_momentum, args.finetune_layers, args.l2, args.augment, args.marginalize,
+      args.log_interval, args.threads, args.checkpoint, args.resume)
 
 
 # ---
@@ -784,4 +860,43 @@ def test_initialize_variables():
   for v in tf.global_variables():
     assert hasattr(v, '_keras_initialized') and v._keras_initialized  # check for initialization
     assert sess.run(tf.is_variable_initialized(v))  # check for initialization
+
+
+def test_create_augmented_batch():
+  import pytest
+
+  tf.reset_default_graph()
+  K.clear_session()
+  sess = K.get_session()
+
+  image = np.random.rand(64,64,3)
+
+  # wrong sizes
+  with pytest.raises(AssertionError):
+    create_augmented_batch(image, 3)
+    create_augmented_batch(image, 31)
+
+  # correct sizes
+  def test(batch_size):
+    aug_images_tf = create_augmented_batch(image, batch_size)
+    aug_images = sess.run(aug_images_tf)
+    assert aug_images.shape == (batch_size,64,64,3)
+
+  test(32)
+  test(4)
+  test(1)
+
+  # deterministic behavior
+  def test2(batch_size):
+    aug_images_1_tf = create_augmented_batch(image, batch_size)
+    aug_images_1 = sess.run(aug_images_1_tf)
+
+    aug_images_2_tf = create_augmented_batch(image, batch_size)
+    aug_images_2 = sess.run(aug_images_2_tf)
+
+    assert np.array_equal(aug_images_1, aug_images_2)
+
+  test2(32)
+  test2(4)
+  test2(1)
 
