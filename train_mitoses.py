@@ -369,9 +369,15 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
       x = Flatten()(x)
       #x = GlobalAveragePooling2D()(x)
       #x = Dropout(0.5)(x)
+      #x = Dropout(0.1)(x)
       #x = Dense(256, activation='relu', name='fc1')(x)
+      #x = Dense(256, kernel_initializer="he_normal",
+      #    kernel_regularizer=keras.regularizers.l2(l2))(x)
       #x = Dropout(0.5)(x)
+      #x = Dropout(0.1)(x)
       #x = Dense(256, activation='relu', name='fc2')(x)
+      #x = Dense(256, kernel_initializer="he_normal",
+      #    kernel_regularizer=keras.regularizers.l2(l2))(x)
       # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
       logits = Dense(1, kernel_initializer="glorot_normal",
           kernel_regularizer=keras.regularizers.l2(l2))(x)
@@ -380,7 +386,8 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     elif model_name == "resnet":
       # create a model by replacing the classifier of a ResNet50 model with a new classifier
       # specific to the breast cancer problem
-      # recommend fine-tuning last 11 layers
+      # recommend fine-tuning last 11 (stage 5 block c), 21 (stage 5 blocks b & c), or 33 (stage
+      # 5 blocks a,b,c) layers
       #with tf.device("/cpu"):
       # NOTE: there is an issue in keras with using batch norm with model templating, i.e.,
       # defining a model with generic inputs and then calling it on a tensor.  the issue stems from
@@ -443,11 +450,20 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
 
   # loss
   with tf.name_scope("loss"):
+    def compute_total_loss(model, loss):
+      total_loss = loss
+      for layer in model.layers:
+        if layer.trainable:
+          for l in layer.losses:
+            total_loss += l
+      return total_loss
+
     # use noise marginalization at test time
     labels = tf.cond(tf.logical_and(marginalization, tf.logical_not(K.learning_phase())),
         lambda: labels[0], lambda: labels)
-    loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
+    base_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
       labels=tf.reshape(labels, [-1, 1]), logits=logits))
+    loss = compute_total_loss(model, base_loss)  # including all weight regularization
 
   # optim
   with tf.name_scope("optim"):
@@ -455,9 +471,11 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     # - freeze all pre-trained model layers.
     for layer in model_base.layers:
       layer.trainable = False
+    # add any weight regularization to the base loss for unfrozen layers:
+    clf_loss = compute_total_loss(model, base_loss)
     clf_opt = tf.train.AdamOptimizer(clf_lr)
-    clf_grads_and_vars = clf_opt.compute_gradients(loss, var_list=model.trainable_weights)
-    #clf_train_op = opt.minimize(loss, var_list=model.trainable_weights)
+    clf_grads_and_vars = clf_opt.compute_gradients(clf_loss, var_list=model.trainable_weights)
+    #clf_train_op = opt.minimize(clf_loss, var_list=model.trainable_weights)
     clf_apply_grads_op = clf_opt.apply_gradients(clf_grads_and_vars)
     clf_model_update_ops = model.updates
     clf_train_op = tf.group(clf_apply_grads_op, *clf_model_update_ops)
@@ -469,9 +487,12 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     if finetune_layers > 0:
       for layer in model_base.layers[-finetune_layers:]:
         layer.trainable = True
+    # add any weight regularization to the base loss for unfrozen layers:
+    finetune_loss = compute_total_loss(model, base_loss)
     finetune_opt = tf.train.MomentumOptimizer(finetune_lr, finetune_momentum, use_nesterov=True)
-    finetune_grads_and_vars = finetune_opt.compute_gradients(loss, var_list=model.trainable_weights)
-    #finetune_train_op = opt.minimize(loss, var_list=model.trainable_weights)
+    finetune_grads_and_vars = finetune_opt.compute_gradients(finetune_loss,
+        var_list=model.trainable_weights)
+    #finetune_train_op = opt.minimize(finetune_loss, var_list=model.trainable_weights)
     finetune_apply_grads_op = finetune_opt.apply_gradients(finetune_grads_and_vars)
     finetune_model_update_ops = model.updates
     finetune_train_op = tf.group(finetune_apply_grads_op, *finetune_model_update_ops)
@@ -636,14 +657,15 @@ if __name__ == "__main__":
   parser.add_argument("--patches_path", default=os.path.join("data", "mitoses", "patches"),
       help="path to the generated image patches containing `train` & `val` folders "\
            "(default: %(default)s)")
-  parser.add_argument("--exp_parent_path", default=os.path.join("experiments", "mitoses", "sanity"),
+  parser.add_argument("--exp_parent_path", default=os.path.join("experiments", "mitoses"),
       help="parent path in which to store experiment folders (default: %(default)s)")
   parser.add_argument("--exp_name", default=None,
       help="path within the experiment parent path in which to store the model checkpoints, "\
            "logs, etc. for this experiment; an existing path can be used to resume training "\
-           "(default: %%y-%%m-%%d_%%H:%%M:%%S_model_name_patch_size_x_batch_size_x_clf_epochs_x_"\
-           "finetune_epochs_x_clf_lr_x_finetune_lr_x_l2_x)")
-  parser.add_argument("--model_name", default="vgg",
+           "(default: %%y-%%m-%%d_%%H:%%M:%%S_{model})")
+  parser.add_argument("--exp_name_suffix", default=None,
+      help="suffix to add to experiment name (default: all parameters concatenated together)")
+  parser.add_argument("--model", default="vgg",
       help="name of the model to use in ['logreg', 'vgg', 'resnet'] (default: %(default)s)")
   parser.add_argument("--patch_size", type=int, default=64,
       help="integer length to which the square patches will be resized (default: %(default)s)")
@@ -697,15 +719,18 @@ if __name__ == "__main__":
   train_path = os.path.join(args.patches_path, "train")
   val_path = os.path.join(args.patches_path, "val")
 
-  if args.exp_name == None:
+  if args.exp_name is None:
     date = datetime.strftime(datetime.today(), "%y%m%d_%H%M%S")
-    args.exp_name = f"{date}_{args.model_name}_patch_size_{args.patch_size}_batch_size_"\
-                    f"{args.train_batch_size}_clf_epochs_{args.clf_epochs}_finetune_epochs_"\
-                    f"{args.finetune_epochs}_clf_lr_{args.clf_lr}_finetune_lr_{args.finetune_lr}_"\
-                    f"finetune_momentum_{args.finetune_momentum}_"\
-                    f"finetune_layers_{args.finetune_layers}_l2_{args.l2}_aug_{args.augment}_"\
-                    f"marg_{args.marginalize}"
-  exp_path = os.path.join(args.exp_parent_path, args.exp_name)
+    args.exp_name = date + "_" + args.model
+  if args.exp_name_suffix is None:
+    args.exp_name_suffix = f"patch_size_{args.patch_size}_batch_size_{args.train_batch_size}_"\
+                           f"clf_epochs_{args.clf_epochs}_finetune_epochs_{args.finetune_epochs}_"\
+                           f"clf_lr_{args.clf_lr}_finetune_lr_{args.finetune_lr}_finetune_"\
+                           f"momentum_{args.finetune_momentum}_finetune_layers_"\
+                           f"{args.finetune_layers}_l2_{args.l2}_aug_{args.augment}_marg_"\
+                           f"{args.marginalize}"
+  full_exp_name = args.exp_name + "_" + args.exp_name_suffix
+  exp_path = os.path.join(args.exp_parent_path, full_exp_name)
 
   # make an experiment folder
   if not os.path.exists(exp_path):
@@ -720,7 +745,7 @@ if __name__ == "__main__":
   shutil.copy2(os.path.realpath(__file__), exp_path)
 
   # train!
-  train(train_path, val_path, exp_path, args.model_name, args.patch_size, args.train_batch_size,
+  train(train_path, val_path, exp_path, args.model, args.patch_size, args.train_batch_size,
       args.val_batch_size, args.clf_epochs, args.finetune_epochs, args.clf_lr, args.finetune_lr,
       args.finetune_momentum, args.finetune_layers, args.l2, args.augment, args.marginalize,
       args.log_interval, args.threads, args.checkpoint, args.resume)
