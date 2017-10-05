@@ -330,13 +330,13 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
   # data
   with tf.name_scope("data"):
     # TODO: add data augmentation function
-    train_dataset = (tf.contrib.data.Dataset.list_files('{}/*/*.jpg'.format(train_path))
+    train_dataset = (tf.contrib.data.Dataset.list_files(os.path.join(train_path, "*", "*.jpg"))
         .shuffle(500000)
         .map(lambda filename: preprocess(filename, patch_size, augmentation, model_name),
           num_threads=threads, output_buffer_size=100*train_batch_size)
         .batch(train_batch_size))
     if marginalization:
-      val_dataset = (tf.contrib.data.Dataset.list_files('{}/*/*.jpg'.format(val_path))
+      val_dataset = (tf.contrib.data.Dataset.list_files(os.path.join(val_path, "*", "*.jpg"))
           .map(lambda filename: preprocess(filename, patch_size, False, model_name))
           .map(lambda image, label, filename:
               (create_augmented_batch(image, val_batch_size),
@@ -344,7 +344,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
                tf.tile(tf.expand_dims(filename, -1), [val_batch_size])),
             num_threads=threads, output_buffer_size=25*val_batch_size))
     else:
-      val_dataset = (tf.contrib.data.Dataset.list_files('{}/*/*.jpg'.format(val_path))
+      val_dataset = (tf.contrib.data.Dataset.list_files(os.path.join(val_path, "*", "*.jpg"))
           .map(lambda filename: preprocess(filename, patch_size, False, model_name),
             num_threads=threads, output_buffer_size=100*val_batch_size)
           .batch(val_batch_size))
