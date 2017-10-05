@@ -743,7 +743,7 @@ if __name__ == "__main__":
 
   # make an experiment folder
   if not os.path.exists(exp_path):
-    os.makedirs(exp_path)
+    os.makedirs(os.path.join(exp_path, "checkpoints"))
   print("experiment directory: {}".format(exp_path))
 
   # save args to a file in the experiment folder, appending if it exists
