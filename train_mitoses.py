@@ -8,7 +8,8 @@ import shutil
 import keras
 from keras import backend as K
 from keras.applications.vgg16 import VGG16
-from keras.applications.resnet50 import ResNet50
+#from keras.applications.resnet50 import ResNet50
+from resnet50 import ResNet50
 from keras.initializers import VarianceScaling
 from keras.layers import Dense, Dropout, Flatten, GlobalAveragePooling2D, Input
 from keras.models import Model
