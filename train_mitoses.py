@@ -254,6 +254,24 @@ def initialize_variables(sess):
   return global_step, global_epoch
 
 
+def compute_l2_reg(model):
+  """Compute L2 loss of trainable model weights, excluding biases.
+
+  Args:
+    model: A Keras Model object.
+
+  Returns:
+    The L2 regularization loss of all trainable model weights.
+  """
+  weights = []
+  for layer in model.layers:
+    if layer.trainable:
+      if hasattr(layer, 'kernel'):
+        weights.append(layer.kernel)
+  l2_loss = tf.add_n([tf.nn.l2_loss(w) for w in weights])
+  return l2_loss
+
+
 def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_size, val_batch_size,
     clf_epochs, finetune_epochs, clf_lr, finetune_lr, finetune_momentum, finetune_layers, l2,
     augmentation, marginalization, log_interval, threads, checkpoint, resume):
@@ -353,8 +371,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
       inputs = Input(shape=input_shape, tensor=images)
       x = Flatten()(inputs)
       # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
-      logits = Dense(1, kernel_initializer="glorot_normal",
-          kernel_regularizer=keras.regularizers.l2(l2))(x)
+      logits = Dense(1, kernel_initializer="glorot_normal")(x)
       model_tower = Model(inputs=inputs, outputs=logits, name="model")
 
     elif model_name == "vgg":
@@ -379,8 +396,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
       #x = Dense(256, kernel_initializer="he_normal",
       #    kernel_regularizer=keras.regularizers.l2(l2))(x)
       # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
-      logits = Dense(1, kernel_initializer="glorot_normal",
-          kernel_regularizer=keras.regularizers.l2(l2))(x)
+      logits = Dense(1, kernel_initializer="glorot_normal")(x)
       model_tower = Model(inputs=inputs, outputs=logits, name="model")
 
     elif model_name == "resnet":
@@ -402,8 +418,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
       x = Flatten()(x)
       #x = GlobalAveragePooling2D()(x)
       # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
-      logits = Dense(1, kernel_initializer="glorot_normal",
-          kernel_regularizer=keras.regularizers.l2(l2))(x)
+      logits = Dense(1, kernel_initializer="glorot_normal")(x)
       model_tower = Model(inputs=inputs, outputs=logits, name="model")
 
     else:
@@ -422,11 +437,14 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     #model = Model(inputs=ins, outputs=outs)  # multi-GPU, data-parallel model
     model = model_tower
 
-    # call model on dataset images to compute logits and predictions
+    # unfreeze all model layers.
+    for layer in model.layers[1:]:  # don't include input layer
+      layer.trainable = True
+
+    # compute logits and predictions
     # NOTE: tf prefers to feed logits into a combined sigmoid and logistic loss function for
     # numerical stability
     # NOTE: preds has an implicit threshold at 0.5
-    #logits = model(images)
     logits = model.output
     # use noise marginalization at test time, i.e., average predictions over a batch of augmented
     # versions of a single image
@@ -435,7 +453,6 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
         lambda: avg_logits, lambda: logits)
     probs = tf.nn.sigmoid(logits, name="probs")
     preds = tf.round(probs, name="preds")
-
     num_preds = tf.shape(preds)[0]
 
     # false-positive & false-negative cases
@@ -450,20 +467,12 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
 
   # loss
   with tf.name_scope("loss"):
-    def compute_total_loss(model, loss):
-      total_loss = loss
-      for layer in model.layers:
-        if layer.trainable:
-          for l in layer.losses:
-            total_loss += l
-      return total_loss
-
     # use noise marginalization at test time
     labels = tf.cond(tf.logical_and(marginalization, tf.logical_not(K.learning_phase())),
         lambda: labels[0], lambda: labels)
     base_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
       labels=tf.reshape(labels, [-1, 1]), logits=logits))
-    loss = compute_total_loss(model, base_loss)  # including all weight regularization
+    loss = base_loss + l2*compute_l2_reg(model)  # including all weight regularization
 
   # optim
   with tf.name_scope("optim"):
@@ -472,7 +481,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     for layer in model_base.layers:
       layer.trainable = False
     # add any weight regularization to the base loss for unfrozen layers:
-    clf_loss = compute_total_loss(model, base_loss)
+    clf_loss = base_loss + l2*compute_l2_reg(model)  # including all weight regularization
     clf_opt = tf.train.AdamOptimizer(clf_lr)
     clf_grads_and_vars = clf_opt.compute_gradients(clf_loss, var_list=model.trainable_weights)
     #clf_train_op = opt.minimize(clf_loss, var_list=model.trainable_weights)
@@ -488,7 +497,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
       for layer in model_base.layers[-finetune_layers:]:
         layer.trainable = True
     # add any weight regularization to the base loss for unfrozen layers:
-    finetune_loss = compute_total_loss(model, base_loss)
+    finetune_loss = base_loss + l2*compute_l2_reg(model)  # including all weight regularization
     finetune_opt = tf.train.MomentumOptimizer(finetune_lr, finetune_momentum, use_nesterov=True)
     finetune_grads_and_vars = finetune_opt.compute_gradients(finetune_loss,
         var_list=model.trainable_weights)
@@ -564,8 +573,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
   epoch_summaries = tf.summary.merge_all("epoch")
 
   # use train and val writers so that plots can be on same graph
-  writer = tf.summary.FileWriter(exp_path, tf.get_default_graph())  #sess.graph)
-  train_writer = tf.summary.FileWriter(os.path.join(exp_path, "train"))
+  train_writer = tf.summary.FileWriter(os.path.join(exp_path, "train"), tf.get_default_graph())
   val_writer = tf.summary.FileWriter(os.path.join(exp_path, "val"))
 
   # save ops
@@ -642,7 +650,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
 
       # save model
       if checkpoint:
-        keras_filename = os.path.join(exp_path,
+        keras_filename = os.path.join(exp_path, "checkpoints",
             f"{f1_val:.5}_f1_{mean_loss_val:.5}_loss_{global_epoch}_epoch_model.hdf5")
         model.save(keras_filename, include_optimizer=False)  # keras model
         saver.save(sess, checkpoint_filename)  # full TF graph
@@ -688,7 +696,7 @@ if __name__ == "__main__":
       help="number of layers at the end of the pretrained portion of the model to fine-tune "\
           "(note: the new classifier layers will still be trained during fine-tuning as well) "\
           "(default: %(default)s)")
-  parser.add_argument("--l2", type=float, default=0.01,
+  parser.add_argument("--l2", type=float, default=1e-3,
       help="amount of l2 weight regularization (default: %(default)s)")
   augment_parser = parser.add_mutually_exclusive_group(required=False)
   augment_parser.add_argument("--augment", dest="augment", action="store_true",
@@ -756,12 +764,26 @@ if __name__ == "__main__":
 # TODO: eventually move these to a separate file.
 # `py.test train_mitoses.py`
 
+# TODO: use this fixture when we move these tests to a test module
+#import pytest
+#
+#@pytest.fixture(autouse=True)
+#def reset():
+#  """Ensure that the TensorFlow graph/session are clean."""
+#  tf.reset_default_graph()
+#  K.clear_session()
+#  yield  # run test
+
+def reset():
+  """Ensure that the TensorFlow graph/session are clean."""
+  tf.reset_default_graph()
+  K.clear_session()
+
 def test_get_label():
   import pytest
 
   # mitosis
-  K.clear_session()
-  tf.reset_default_graph()
+  reset()
   filename = "train/mitosis/1_03_05_713_348.jpg"
   label_op = get_label(filename)
   sess = K.get_session()
@@ -769,8 +791,7 @@ def test_get_label():
   assert label == 1
 
   # normal
-  K.clear_session()
-  tf.reset_default_graph()
+  reset()
   filename = "train/normal/1_03_05_713_348.jpg"
   label_op = get_label(filename)
   sess = K.get_session()
@@ -779,8 +800,7 @@ def test_get_label():
 
   # wrong label name
   with pytest.raises(tf.errors.InvalidArgumentError):
-    K.clear_session()
-    tf.reset_default_graph()
+    reset()
     filename = "train/unknown/1_03_05_713_348.jpg"
     label_op = get_label(filename)
     sess = K.get_session()
@@ -788,9 +808,7 @@ def test_get_label():
 
 
 def test_resettable_metric():
-  K.clear_session()
-  tf.reset_default_graph()
-
+  reset()
   x = tf.placeholder(tf.int32, [None, 1])
   x1 = np.array([1,0,0,0]).reshape(4,1)
   x2 = np.array([0,0,0,0]).reshape(4,1)
@@ -830,11 +848,12 @@ def test_resettable_metric():
 
 
 def test_initialize_variables():
-  # NOTE: keep the `K.get_session()` call up here to ensure the the `initialize_variables` function
+  # NOTE: keep the `K.get_session()` call up here to ensure that the `initialize_variables` function
   # is working properly.
-  tf.reset_default_graph()
-  #K.manual_variable_initialization(True)
-  K.clear_session()  # this is needed if we want to create sessions at the beginning
+  #tf.reset_default_graph()
+  ##K.manual_variable_initialization(True)
+  #K.clear_session()  # this is needed if we want to create sessions at the beginning
+  reset()
   sess = K.get_session()
 
   # create model with a mix of pretrained and new weights
@@ -890,8 +909,7 @@ def test_initialize_variables():
 def test_create_augmented_batch():
   import pytest
 
-  tf.reset_default_graph()
-  K.clear_session()
+  reset()
   sess = K.get_session()
 
   image = np.random.rand(64,64,3)
@@ -924,4 +942,35 @@ def test_create_augmented_batch():
   test2(32)
   test2(4)
   test2(1)
+
+
+def test_compute_l2_reg():
+  reset()
+
+  # create model with a mix of pretrained and new weights
+  # NOTE: the pretrained layers will be initialized by Keras on creation, while the new Dense
+  # layer will remain uninitialized
+  input_shape = (224,224,3)
+  inputs = Input(shape=input_shape)
+  x = Dense(1)(inputs)
+  logits = Dense(1)(x)
+  model = Model(inputs=inputs, outputs=logits, name="model")
+
+  for l in model.layers:
+    l.trainable = True
+
+  sess = K.get_session()
+
+  # all layers
+  l2_reg = compute_l2_reg(model)
+  correct_l2_reg = tf.nn.l2_loss(model.layers[1].kernel) + tf.nn.l2_loss(model.layers[2].kernel)
+  l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
+  assert np.array_equal(l2_reg_val, correct_l2_reg_val)
+
+  # subset of layers
+  model.layers[1].trainable = False
+  l2_reg = compute_l2_reg(model)
+  correct_l2_reg = tf.nn.l2_loss(model.layers[2].kernel)
+  l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
+  assert np.array_equal(l2_reg_val, correct_l2_reg_val)
 
