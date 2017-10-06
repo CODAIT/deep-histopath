@@ -131,6 +131,7 @@ def gen_dense_coords(h, w, size, stride):
   # generate coordinates
   for row in range(0, h-size+1, stride):
     for col in range(0, w-size+1, stride):
+      # TODO: should this actually start at (0, 0) so that there is mirroring on the left and top?
       yield row + half_size, col + half_size  # centered coordinates for this patch
 
 
@@ -482,7 +483,6 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
               save_patch(patch, save_path, lab, case, region, row, col, rot, row_shift, col_shift)
           # regular sampling for normal cases
           # NOTE: This may sample the false-positive patches again, but that's fine for now
-          # TODO: rotations & translations for normal patches
           normal_coords_gen = gen_normal_coords(mask, patch_size, stride, overlap_threshold)
           patch_gen = gen_patches(im, normal_coords_gen, patch_size, 0, 0, max_shift, p)
           for patch, row, col, rot, row_shift, col_shift in patch_gen:
