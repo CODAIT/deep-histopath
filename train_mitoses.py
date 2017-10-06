@@ -477,6 +477,8 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
 
   # optim
   with tf.name_scope("optim"):
+    # TODO: extract this out into a function with tests
+    # TODO: rework the `finetune_layers` param to include starting from the beg/end
     # classifier
     # - freeze all pre-trained model layers.
     for layer in model_base.layers:
@@ -494,7 +496,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     # - unfreeze a portion of the pre-trained model layers.
     # note, could make this arbitrary, but for now, fine-tune some number of layers at the *end* of
     # the pretrained portion of the model
-    if finetune_layers > 0:
+    if finetune_layers != 0:
       for layer in model_base.layers[-finetune_layers:]:
         layer.trainable = True
     # add any weight regularization to the base loss for unfrozen layers:
