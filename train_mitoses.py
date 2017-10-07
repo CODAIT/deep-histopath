@@ -7,8 +7,7 @@ import shutil
 
 import keras
 from keras import backend as K
-from keras.applications.vgg16 import VGG16
-#from keras.applications.resnet50 import ResNet50
+from keras.applications import VGG16, VGG19  #, ResNet50
 from resnet50 import ResNet50
 from keras.initializers import VarianceScaling
 from keras.layers import Dense, Dropout, Flatten, GlobalAveragePooling2D, Input
@@ -96,7 +95,7 @@ def normalize(image, model_name):
   Returns:
     A normalized image Tensor.
   """
-  if model_name in ("vgg", "resnet"):
+  if model_name in ("vgg", "vgg19", "resnet"):
     image = image * 255.0  # float32 in [0, 255]
     image = image[..., ::-1]  # rbg -> bgr
     image = image - [103.939, 116.779, 123.68]  # mean centering using imagenet means
@@ -118,7 +117,7 @@ def unnormalize(image, model_name):
     An unnormalized image Tensor of shape (...,h,w,c) with values in
     [0, 1].
   """
-  if model_name in ("vgg", "resnet"):
+  if model_name in ("vgg", "vgg19", "resnet"):
     image = image + [103.939, 116.779, 123.68]  # mean centering using imagenet means
     image = image[..., ::-1]  # bgr -> rgb
     image = image / 255.0  # float32 in [0, 1]
@@ -400,6 +399,20 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
       logits = Dense(1, kernel_initializer="glorot_normal")(x)
       model_tower = Model(inputs=inputs, outputs=logits, name="model")
 
+    elif model_name == "vgg19":
+      # create a model by replacing the classifier of a VGG19 model with a new classifier specific
+      # to the breast cancer problem
+      # recommend fine-tuning last 4 layers
+      #with tf.device("/cpu"):
+      #inputs = Input(shape=input_shape)
+      model_base = VGG19(include_top=False, input_shape=input_shape, input_tensor=images)  #inputs)
+      inputs = model_base.inputs
+      x = model_base.output
+      x = Flatten()(x)
+      # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
+      logits = Dense(1, kernel_initializer="glorot_normal")(x)
+      model_tower = Model(inputs=inputs, outputs=logits, name="model")
+
     elif model_name == "resnet":
       # create a model by replacing the classifier of a ResNet50 model with a new classifier
       # specific to the breast cancer problem
@@ -677,7 +690,7 @@ if __name__ == "__main__":
   parser.add_argument("--exp_name_suffix", default=None,
       help="suffix to add to experiment name (default: all parameters concatenated together)")
   parser.add_argument("--model", default="vgg",
-      help="name of the model to use in ['logreg', 'vgg', 'resnet'] (default: %(default)s)")
+      help="name of the model to use in ['logreg', 'vgg', 'vgg19', 'resnet'] (default: %(default)s)")
   parser.add_argument("--patch_size", type=int, default=64,
       help="integer length to which the square patches will be resized (default: %(default)s)")
   parser.add_argument("--train_batch_size", type=int, default=32,
