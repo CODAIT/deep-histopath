@@ -186,7 +186,7 @@ def create_augmented_batch(image, batch_size):
   return images
 
 
-def create_reset_metric(metric, scope, **metric_kwargs):  # prob safer to only allow kwargs
+def create_resettable_metric(metric, scope, **metric_kwargs):  # prob safer to only allow kwargs
   """Create a resettable metric.
 
   Args:
@@ -524,13 +524,13 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
 
   # metrics
   with tf.name_scope("metrics"):
-    mean_loss, mean_loss_update_op, mean_loss_reset_op = create_reset_metric(tf.metrics.mean,
+    mean_loss, mean_loss_update_op, mean_loss_reset_op = create_resettable_metric(tf.metrics.mean,
         'mean_loss', values=loss)
-    acc, acc_update_op, acc_reset_op = create_reset_metric(tf.metrics.accuracy,
+    acc, acc_update_op, acc_reset_op = create_resettable_metric(tf.metrics.accuracy,
         'acc', labels=labels, predictions=preds)
-    ppv, ppv_update_op, ppv_reset_op = create_reset_metric(tf.metrics.precision,
+    ppv, ppv_update_op, ppv_reset_op = create_resettable_metric(tf.metrics.precision,
         'ppv', labels=labels, predictions=preds)
-    sens, sens_update_op, sens_reset_op = create_reset_metric(tf.metrics.recall,
+    sens, sens_update_op, sens_reset_op = create_resettable_metric(tf.metrics.recall,
         'sens', labels=labels, predictions=preds)
     f1 = 2 * (ppv * sens) / (ppv + sens)
 
@@ -830,7 +830,7 @@ def test_resettable_metric():
   x2 = np.array([0,0,0,0]).reshape(4,1)
 
   with tf.name_scope("something"):  # testing nested name/variable scopes
-    mean_op, update_op, reset_op = create_reset_metric(tf.metrics.mean, 'mean_loss', values=x)
+    mean_op, update_op, reset_op = create_resettable_metric(tf.metrics.mean, 'mean_loss', values=x)
 
   sess = K.get_session()
   sess.run(tf.global_variables_initializer())
