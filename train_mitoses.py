@@ -16,6 +16,28 @@ import numpy as np
 import tensorflow as tf
 
 
+# data
+
+def get_image(filename, patch_size):
+  """Get image from filename.
+
+  Args:
+    filename: String filename of an image.
+    patch_size: Integer length to which the square image will be
+      resized.
+
+  Returns:
+    TensorFlow tensor containing the decoded and resized image with
+    type float32 and values in [0, 1).
+  """
+  image_string = tf.read_file(filename)
+  image = tf.image.decode_jpeg(image_string, channels=3)  # shape (h,w,c), uint8 in [0, 255]
+  image = tf.image.convert_image_dtype(image, dtype=tf.float32)  # float32 [0, 1)
+  image = tf.image.resize_images(image, [patch_size, patch_size])  # float32 [0, 1)
+  #with tf.control_dependencies([tf.assert_type(image, tf.float32, image.dtype)]):
+  return image
+
+
 def get_label(filename):
   """Get label from filename.
 
@@ -40,74 +62,56 @@ def get_label(filename):
     return label
 
 
-def get_image(filename, patch_size):
-  """Get image from filename.
-
-  Args:
-    filename: String filename of an image.
-    patch_size: Integer length to which the square image will be
-      resized.
-
-  Returns:
-    TensorFlow tensor containing the decoded and resized image with
-    type float32 and values in [0, 1).
-  """
-  image_string = tf.read_file(filename)
-  image = tf.image.decode_jpeg(image_string, channels=3)  # shape (h,w,c), uint8 in [0, 255]
-  image = tf.image.convert_image_dtype(image, dtype=tf.float32)  # float32 [0, 1)
-  image = tf.image.resize_images(image, [patch_size, patch_size])  # float32 [0, 1)
-  #with tf.control_dependencies([tf.assert_type(image, tf.float32, image.dtype)]):
-  return image
-
-
-def preprocess(filename, patch_size, augmentation, model_name):
+def preprocess(filename, patch_size):
   """Get image and label from filename.
 
   Args:
     filename: String filename of an image.
     patch_size: Integer length to which the square image will be
-      resized.
-    augmentation: Boolean for whether or not to apply random augmentation
-      to the image.
-    model_name: String indicating the model to use.
+      resized, if necessary.
 
   Returns:
-    Tuple of a TensorFlow image tensor, a binary label, and a filename.
+    Tuple of a float32 image Tensor with shape (h,w,c) and values in
+    [0, 1), a binary label, and a filename.
   """
   #  return image_resized, label
   label = get_label(filename)
   #label = tf.expand_dims(label, -1)  # make each scalar label a vector of length 1 to match model
   image = get_image(filename, patch_size)  # float32 in [0, 1)
-  if augmentation:
-    image = augment(image)
-    image = tf.clip_by_value(image, 0, 1)
-  image = normalize(image, model_name)
   return image, label, filename
 
 
 def normalize(image, model_name):
-  """Normalize an image.
+  """Normalize an image tensor.
+
+  Note: due to broadcasting, this works with a single image, or a batch
+  of images.
 
   Args:
-    image: A Tensor of shape (h,w,c) with values in [0, 1].
+    image: A Tensor of shape (...,h,w,c) with values in [0, 1].
     model_name: String indicating the model to use.
 
   Returns:
-    A normalized image Tensor.
+    A normalized image Tensor of shape (...,h,w,c).
   """
+  # NOTE: don't use in-place updates to avoid side-effects
   if model_name in ("vgg", "vgg19", "resnet"):
-    image = image * 255.0  # float32 in [0, 255]
     image = image[..., ::-1]  # rbg -> bgr
+    image = image * 255  # float32 in [0, 255]
     image = image - [103.939, 116.779, 123.68]  # mean centering using imagenet means
   else:
-    #image = image / 255.
+    # normalize to [-1, 1]
+    #image = image / 255
     image = image - 0.5
-    image = image * 2.
+    image = image * 2
   return image
 
 
 def unnormalize(image, model_name):
-  """Unnormalize an image.
+  """Unnormalize an image tensor.
+
+  Note: due to broadcasting, this works with a single image, or a batch
+  of images.
 
   Args:
     image: A Tensor of shape (...,h,w,c) with normalized values.
@@ -117,12 +121,13 @@ def unnormalize(image, model_name):
     An unnormalized image Tensor of shape (...,h,w,c) with values in
     [0, 1].
   """
+  # NOTE: don't use in-place updates to avoid side-effects
   if model_name in ("vgg", "vgg19", "resnet"):
     image = image + [103.939, 116.779, 123.68]  # mean centering using imagenet means
+    image = image / 255  # float32 in [0, 1]
     image = image[..., ::-1]  # bgr -> rgb
-    image = image / 255.0  # float32 in [0, 1]
   else:
-    image = image / 2.
+    image = image / 2
     image = image + 0.5
   return image
 
@@ -131,11 +136,11 @@ def augment(image, seed=None):
   """Apply random data augmentation to the given image.
 
   Args:
-    image: A Tensor of shape (h,w,c).
+    image: A Tensor of shape (h,w,c) with values in [0, 1].
     seed: An integer used to create a random seed.
 
   Returns:
-    A data-augmented image.
+    A data-augmented image with values in [0, 1].
   """
   # NOTE: these values currently come from the Google pathology paper:
   # Liu Y, Gadepalli K, Norouzi M, Dahl GE, Kohlberger T, Boyko A, et al.
@@ -146,6 +151,7 @@ def augment(image, seed=None):
   image = tf.image.random_contrast(image, 0.25, 1, seed=seed)
   image = tf.image.random_saturation(image, 0.75, 1, seed=seed)
   image = tf.image.random_hue(image, 0.04, seed=seed)
+  image = tf.clip_by_value(image, 0, 1)
   return image
 
 
@@ -161,8 +167,8 @@ def create_augmented_batch(image, batch_size):
     batch_size: Number of augmented versions to generate.
 
   Returns:
-    A Tensor containing a batch of `batch_size` data-augmented versions
-    of the given image.
+    A Tensor of shape (batch_size,h,w,c) containing a batch of
+    data-augmented versions of the given image.
   """
   assert batch_size % 4 == 0 or batch_size == 1, "batch_size must be 1 or divisible by 4"
 
@@ -185,6 +191,92 @@ def create_augmented_batch(image, batch_size):
 
   return images
 
+
+def create_dataset(path, model_name, patch_size, batch_size, shuffle, augmentation, marginalization,
+    threads, prefetch_batches):
+  """Create a dataset.
+
+  Args:
+    path: String path to the generated validation image patches.
+      This should contain folders for each class.
+    model_name: String indicating the model to use.
+    patch_size: Integer length to which the square patches will be
+      resized.
+    batch_size: Integer training batch size.
+    shuffle: Boolean for whether or not to shuffle filenames.
+    augmentation: Boolean for whether or not to apply random augmentation
+      to the images.
+    marginalization: Boolean for whether or not to use noise
+      marginalization when evaluating the validation set.  If True, then
+      each image in the validation set will be expanded to a batch of
+      augmented versions of that image, and predicted probabilities for
+      each batch will be averaged to yield a single noise-marginalized
+      prediction for each image.  Note: if this is True, then
+      `batch_size` must be divisible by 4, or equal to 1 for a special
+      debugging case of no augmentation.
+    threads: Integer number of threads for dataset buffering.
+    prefetch_batches: Integer number of batches to prefetch.
+
+  Returns:
+    A Dataset object.
+  """
+  # read & process images
+  dataset = tf.contrib.data.Dataset.list_files(os.path.join(path, "*", "*.jpg"))
+
+  if shuffle:
+    dataset = dataset.shuffle(500000)
+
+  dataset = dataset.map(lambda filename: preprocess(filename, patch_size),
+      num_parallel_calls=threads)
+
+  # augment (typically at training time)
+  if augmentation:
+    dataset = dataset.map(lambda image, label, filename: (augment(image), label, filename),
+        num_parallel_calls=threads)
+
+  # marginalize (typically at eval time)
+  if marginalization:
+    dataset = dataset.map(lambda image, label, filename:
+        (create_augmented_batch(image, batch_size),
+         tf.tile(tf.expand_dims(label, -1), [batch_size]),
+         tf.tile(tf.expand_dims(filename, -1), [batch_size])),
+        num_parallel_calls=threads)
+
+  # normalize
+  dataset = dataset.map(lambda image, label, filename:
+    (normalize(image, model_name), label, filename), num_parallel_calls=threads)
+
+  # batch if necessary
+  if not marginalization:
+    dataset = dataset.batch(batch_size)
+
+  # prefetch
+  dataset = dataset.prefetch(prefetch_batches)
+
+  return dataset
+
+
+# model
+
+def compute_l2_reg(model):
+  """Compute L2 loss of trainable model weights, excluding biases.
+
+  Args:
+    model: A Keras Model object.
+
+  Returns:
+    The L2 regularization loss of all trainable model weights.
+  """
+  weights = []
+  for layer in model.layers:
+    if layer.trainable:
+      if hasattr(layer, 'kernel'):
+        weights.append(layer.kernel)
+  l2_loss = tf.add_n([tf.nn.l2_loss(w) for w in weights])
+  return l2_loss
+
+
+# utils
 
 def create_resettable_metric(metric, scope, **metric_kwargs):  # prob safer to only allow kwargs
   """Create a resettable metric.
@@ -254,27 +346,11 @@ def initialize_variables(sess):
   return global_step, global_epoch
 
 
-def compute_l2_reg(model):
-  """Compute L2 loss of trainable model weights, excluding biases.
-
-  Args:
-    model: A Keras Model object.
-
-  Returns:
-    The L2 regularization loss of all trainable model weights.
-  """
-  weights = []
-  for layer in model.layers:
-    if layer.trainable:
-      if hasattr(layer, 'kernel'):
-        weights.append(layer.kernel)
-  l2_loss = tf.add_n([tf.nn.l2_loss(w) for w in weights])
-  return l2_loss
-
+# training
 
 def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_size, val_batch_size,
     clf_epochs, finetune_epochs, clf_lr, finetune_lr, finetune_momentum, finetune_layers, l2,
-    augmentation, marginalization, log_interval, threads, checkpoint, resume):
+    augmentation, marginalization, threads, prefetch_batches, log_interval, checkpoint, resume):
   """Train a model.
 
   Args:
@@ -301,7 +377,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
       layers will still be trained during fine-tuning as well.
     l2: Float L2 global regularization value.
     augmentation: Boolean for whether or not to apply random augmentation
-      to the image.
+      to the images.
     marginalization: Boolean for whether or not to use noise
       marginalization when evaluating the validation set.  If True, then
       each image in the validation set will be expanded to a batch of
@@ -310,9 +386,10 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
       prediction for each image.  Note: if this is True, then
       `val_batch_size` must be divisible by 4, or equal to 1 for a
       special debugging case of no augmentation.
+    threads: Integer number of threads for dataset buffering.
+    prefetch_batches: Integer number of batches to prefetch.
     log_interval: Integer number of steps between logging during
       training.
-    threads: Integer number of threads for dataset buffering.
     checkpoint: Boolean flag for whether or not to save a checkpoint
       after each epoch.
     resume: Boolean flag for whether or not to resume training from a
@@ -328,29 +405,18 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
 
   # data
   with tf.name_scope("data"):
-    # TODO: add data augmentation function
-    train_dataset = (tf.contrib.data.Dataset.list_files(os.path.join(train_path, "*", "*.jpg"))
-        .shuffle(500000)
-        .map(lambda filename: preprocess(filename, patch_size, augmentation, model_name),
-          num_threads=threads, output_buffer_size=100*train_batch_size)
-        .batch(train_batch_size))
-    if marginalization:
-      val_dataset = (tf.contrib.data.Dataset.list_files(os.path.join(val_path, "*", "*.jpg"))
-          .map(lambda filename: preprocess(filename, patch_size, False, model_name))
-          .map(lambda image, label, filename:
-              (create_augmented_batch(image, val_batch_size),
-               tf.tile(tf.expand_dims(label, -1), [val_batch_size]),
-               tf.tile(tf.expand_dims(filename, -1), [val_batch_size])),
-            num_threads=threads, output_buffer_size=25*val_batch_size))
-    else:
-      val_dataset = (tf.contrib.data.Dataset.list_files(os.path.join(val_path, "*", "*.jpg"))
-          .map(lambda filename: preprocess(filename, patch_size, False, model_name),
-            num_threads=threads, output_buffer_size=100*val_batch_size)
-          .batch(val_batch_size))
+    train_dataset = create_dataset(train_path, model_name, patch_size, train_batch_size, True,
+        augmentation, False, threads, prefetch_batches)
+    val_dataset = create_dataset(val_path, model_name, patch_size, val_batch_size, False, False,
+        marginalization, threads, prefetch_batches)
 
     iterator = tf.contrib.data.Iterator.from_structure(train_dataset.output_types,
                                                        train_dataset.output_shapes)
+    train_init_op = iterator.make_initializer(train_dataset)
+    val_init_op = iterator.make_initializer(val_dataset)
+    input_shape = (patch_size, patch_size, 3)
     images, labels, filenames = iterator.get_next()
+
     actual_batch_size = tf.shape(images)[0]
     percent_pos = tf.reduce_mean(labels)  # positive labels are 1
     pos_mask = tf.cast(labels, tf.bool)
@@ -359,12 +425,11 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     normal_images = tf.boolean_mask(images, neg_mask)
     mitosis_filenames = tf.boolean_mask(filenames, pos_mask)
     normal_filenames = tf.boolean_mask(filenames, neg_mask)
-    input_shape = (patch_size, patch_size, 3)
-    train_init_op = iterator.make_initializer(train_dataset)
-    val_init_op = iterator.make_initializer(val_dataset)
 
   # models
   with tf.name_scope("model"):
+    # TODO: extract this out into into functions
+
     if model_name == "logreg":
       # logistic regression classifier
       model_base = keras.models.Sequential()  # dummy since we aren't fine-tuning this model
@@ -690,7 +755,8 @@ if __name__ == "__main__":
   parser.add_argument("--exp_name_suffix", default=None,
       help="suffix to add to experiment name (default: all parameters concatenated together)")
   parser.add_argument("--model", default="vgg",
-      help="name of the model to use in ['logreg', 'vgg', 'vgg19', 'resnet'] (default: %(default)s)")
+      help="name of the model to use in ['logreg', 'vgg', 'vgg19', 'resnet'] "\
+           "(default: %(default)s)")
   parser.add_argument("--patch_size", type=int, default=64,
       help="integer length to which the square patches will be resized (default: %(default)s)")
   parser.add_argument("--train_batch_size", type=int, default=32,
@@ -721,21 +787,23 @@ if __name__ == "__main__":
       help="do not apply random augmentation to the training images (default: False)")
   parser.set_defaults(augment=True)
   parser.add_argument("--marginalize", default=False, action="store_true",
-      help="use noise marginalization when evaluating the validation set. if this is set, then " \
+      help="use noise marginalization when evaluating the validation set. if this is set, then "\
            "the validation batch_size must be divisible by 4, or equal to 1 for no augmentation "\
            "(default: %(default)s)")
-  parser.add_argument("--log_interval", type=int, default=100,
-      help="number of steps between logging during training (default: %(default)s)")
   parser.add_argument("--threads", type=int, default=5,
       help="number of threads for dataset buffering (default: %(default)s)")
-  parser.add_argument("--resume", default=False, action="store_true",
-      help="resume training from a checkpoint (default: %(default)s)")
+  parser.add_argument("--prefetch_batches", type=int, default=100,
+      help="number of batches to prefetch (default: %(default)s)")
+  parser.add_argument("--log_interval", type=int, default=100,
+      help="number of steps between logging during training (default: %(default)s)")
   checkpoint_parser = parser.add_mutually_exclusive_group(required=False)
   checkpoint_parser.add_argument("--checkpoint", dest="checkpoint", action="store_true",
       help="save a checkpoint after each epoch (default: True)")
   checkpoint_parser.add_argument("--no_checkpoint", dest="checkpoint", action="store_false",
       help="do not save a checkpoint after each epoch (default: False)")
   parser.set_defaults(checkpoint=True)
+  parser.add_argument("--resume", default=False, action="store_true",
+      help="resume training from a checkpoint (default: %(default)s)")
 
   args = parser.parse_args()
 
@@ -772,7 +840,7 @@ if __name__ == "__main__":
   train(train_path, val_path, exp_path, args.model, args.patch_size, args.train_batch_size,
       args.val_batch_size, args.clf_epochs, args.finetune_epochs, args.clf_lr, args.finetune_lr,
       args.finetune_momentum, args.finetune_layers, args.l2, args.augment, args.marginalize,
-      args.log_interval, args.threads, args.checkpoint, args.resume)
+      args.threads, args.prefetch_batches, args.log_interval, args.checkpoint, args.resume)
 
 
 # ---
@@ -794,6 +862,9 @@ def reset():
   """Ensure that the TensorFlow graph/session are clean."""
   tf.reset_default_graph()
   K.clear_session()
+
+
+# data
 
 def test_get_label():
   import pytest
@@ -822,6 +893,201 @@ def test_get_label():
     sess = K.get_session()
     label = sess.run(label_op)
 
+
+def test_normalize_unnormalize():
+  reset()
+  sess = K.get_session()
+  input_shape = (64, 64, 3)
+  x_np = np.random.rand(*input_shape).astype(np.float32)  # uniform sampling in [0, 1)
+  x_batch_np = np.random.rand(2, *input_shape).astype(np.float32)  # uniform sampling in [0, 1)
+
+  # imagenet preprocessing
+  model_name = "vgg"
+  means = np.array([103.939, 116.779, 123.68])
+  x_means_np = np.mean(x_np, axis=(0,1))
+  x_means_np = x_means_np[..., ::-1] * 255 - means
+  x_batch_means_np = np.mean(x_batch_np, axis=(1,2))
+  x_batch_means_np = x_batch_means_np[..., ::-1] * 255 - means
+
+  # single example
+  def test(x_norm, x_orig):
+    # close over x_np & x_means_np
+    assert np.allclose(x_np, x_orig, atol=1e-7)
+    assert ~(np.allclose(x_np, x_norm))
+    assert np.all(np.max(x_norm, axis=(0,1)) > 1)
+    assert np.all(np.max(x_norm, axis=(0,1)) < 255 - means)
+    assert np.all(np.min(x_norm, axis=(0,1)) < 0)
+    assert np.all(np.min(x_norm, axis=(0,1)) > 0 - means)
+    assert np.allclose(np.mean(x_norm, axis=(0,1)), x_means_np, rtol=1e-4)
+
+  # batch of examples
+  def test_batch(x_norm_batch, x_orig_batch):
+    # close over x_np & x_means_np
+    assert np.allclose(x_batch_np, x_orig_batch, atol=1e-7)
+    assert ~(np.allclose(x_batch_np, x_norm_batch))
+    assert np.all(np.max(x_norm_batch, axis=(0,1,2)) > 1)
+    assert np.all(np.max(x_norm_batch, axis=(0,1,2)) < 255 - means)
+    assert np.all(np.min(x_norm_batch, axis=(0,1,2)) < 0)
+    assert np.all(np.min(x_norm_batch, axis=(0,1,2)) > 0 - means)
+    assert np.allclose(np.mean(x_norm_batch, axis=(1,2)), x_batch_means_np, rtol=1e-4)
+
+  ## numpy
+  x_norm_np = normalize(x_np, model_name)
+  x_orig_np = unnormalize(x_norm_np, model_name)
+  test(x_norm_np, x_orig_np)
+
+  x_norm_batch_np = normalize(x_batch_np, model_name)
+  x_orig_batch_np = unnormalize(x_norm_batch_np, model_name)
+  test_batch(x_norm_batch_np, x_orig_batch_np)
+
+  ## tensorflow
+  x = tf.placeholder(tf.float32, [*input_shape])
+  x_norm = normalize(x, model_name)
+  x_orig = unnormalize(x_norm, model_name)
+  x_norm_np, x_orig_np = sess.run([x_norm, x_orig], feed_dict={x: x_np})
+  test(x_norm_np, x_orig_np)
+
+  x_batch = tf.placeholder(tf.float32, [None, *input_shape])
+  x_norm_batch = normalize(x_batch, model_name)
+  x_orig_batch = unnormalize(x_norm_batch, model_name)
+  x_norm_batch_np, x_orig_batch_np = sess.run([x_norm_batch, x_orig_batch],
+      feed_dict={x_batch: x_batch_np})
+  test_batch(x_norm_batch_np, x_orig_batch_np)
+
+
+  # image standardization preprocessing
+  reset()
+  sess = K.get_session()
+  model_name = "not_vgg"
+  x_means_np = np.mean(x_np, axis=(0,1)) * 2 - 1
+  x_batch_means_np = np.mean(x_batch_np, axis=(1,2)) * 2 - 1
+
+  # single example
+  def test(x_norm, x_orig):
+    # close over x_np & x_means_np
+    assert np.allclose(x_np, x_orig, atol=1e-7)
+    assert ~(np.allclose(x_np, x_norm))
+    assert np.all(np.max(x_norm, axis=(0,1)) <= 1)
+    assert np.all(np.max(x_norm, axis=(0,1)) > 0)
+    assert np.all(np.min(x_norm, axis=(0,1)) >= -1)
+    assert np.all(np.min(x_norm, axis=(0,1)) < 0)
+    assert np.allclose(np.mean(x_norm, axis=(0,1)), x_means_np, atol=1e-6, rtol=1e-3)
+
+  # batch of examples
+  def test_batch(x_norm_batch, x_orig_batch):
+    # close over x_np & x_means_np
+    assert np.allclose(x_batch_np, x_orig_batch, atol=1e-7)
+    assert ~(np.allclose(x_batch_np, x_norm_batch))
+    assert np.all(np.max(x_norm_batch, axis=(0,1,2)) <= 1)
+    assert np.all(np.max(x_norm_batch, axis=(0,1,2)) > 0)
+    assert np.all(np.min(x_norm_batch, axis=(0,1,2)) >= -1)
+    assert np.all(np.min(x_norm_batch, axis=(0,1,2)) < 0)
+    assert np.allclose(np.mean(x_norm_batch, axis=(1,2)), x_batch_means_np, atol=1e-6, rtol=1e-3)
+
+  ## numpy
+  x_norm_np = normalize(x_np, model_name)
+  x_orig_np = unnormalize(x_norm_np, model_name)
+  test(x_norm_np, x_orig_np)
+
+  x_norm_batch_np = normalize(x_batch_np, model_name)
+  x_orig_batch_np = unnormalize(x_norm_batch_np, model_name)
+  test_batch(x_norm_batch_np, x_orig_batch_np)
+
+  ## tensorflow
+  x = tf.placeholder(tf.float32, [*input_shape])
+  x_norm = normalize(x, model_name)
+  x_orig = unnormalize(x_norm, model_name)
+  x_norm_np, x_orig_np = sess.run([x_norm, x_orig], feed_dict={x: x_np})
+  test(x_norm_np, x_orig_np)
+
+  x_batch = tf.placeholder(tf.float32, [None, *input_shape])
+  x_norm_batch = normalize(x_batch, model_name)
+  x_orig_batch = unnormalize(x_norm_batch, model_name)
+  x_norm_batch_np, x_orig_batch_np = sess.run([x_norm_batch, x_orig_batch],
+      feed_dict={x_batch: x_batch_np})
+  test_batch(x_norm_batch_np, x_orig_batch_np)
+
+
+def test_create_augmented_batch():
+  import pytest
+
+  reset()
+  sess = K.get_session()
+
+  image = np.random.rand(64,64,3)
+
+  # wrong sizes
+  with pytest.raises(AssertionError):
+    create_augmented_batch(image, 3)
+    create_augmented_batch(image, 31)
+
+  # correct sizes
+  def test(batch_size):
+    aug_images_tf = create_augmented_batch(image, batch_size)
+    aug_images = sess.run(aug_images_tf)
+    assert aug_images.shape == (batch_size,64,64,3)
+
+  test(32)
+  test(4)
+  test(1)
+
+  # deterministic behavior
+  def test2(batch_size):
+    # different session runs
+    aug_images_1_tf = create_augmented_batch(image, batch_size)
+    aug_images_1 = sess.run(aug_images_1_tf)
+
+    aug_images_2_tf = create_augmented_batch(image, batch_size)
+    aug_images_2 = sess.run(aug_images_2_tf)
+
+    assert np.array_equal(aug_images_1, aug_images_2)
+
+    # same session run
+    aug_images_1_tf = create_augmented_batch(image, batch_size)
+    aug_images_2_tf = create_augmented_batch(image, batch_size)
+    aug_images_1, aug_images_2 = sess.run([aug_images_1_tf, aug_images_2_tf])
+
+    assert np.array_equal(aug_images_1, aug_images_2)
+
+  test2(32)
+  test2(4)
+  test2(1)
+
+
+# model
+
+def test_compute_l2_reg():
+  reset()
+
+  # create model with a mix of pretrained and new weights
+  # NOTE: the pretrained layers will be initialized by Keras on creation, while the new Dense
+  # layer will remain uninitialized
+  input_shape = (224,224,3)
+  inputs = Input(shape=input_shape)
+  x = Dense(1)(inputs)
+  logits = Dense(1)(x)
+  model = Model(inputs=inputs, outputs=logits, name="model")
+
+  for l in model.layers:
+    l.trainable = True
+
+  sess = K.get_session()
+
+  # all layers
+  l2_reg = compute_l2_reg(model)
+  correct_l2_reg = tf.nn.l2_loss(model.layers[1].kernel) + tf.nn.l2_loss(model.layers[2].kernel)
+  l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
+  assert np.array_equal(l2_reg_val, correct_l2_reg_val)
+
+  # subset of layers
+  model.layers[1].trainable = False
+  l2_reg = compute_l2_reg(model)
+  correct_l2_reg = tf.nn.l2_loss(model.layers[2].kernel)
+  l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
+  assert np.array_equal(l2_reg_val, correct_l2_reg_val)
+
+
+# utils
 
 def test_resettable_metric():
   reset()
@@ -920,73 +1186,4 @@ def test_initialize_variables():
   for v in tf.global_variables():
     assert hasattr(v, '_keras_initialized') and v._keras_initialized  # check for initialization
     assert sess.run(tf.is_variable_initialized(v))  # check for initialization
-
-
-def test_create_augmented_batch():
-  import pytest
-
-  reset()
-  sess = K.get_session()
-
-  image = np.random.rand(64,64,3)
-
-  # wrong sizes
-  with pytest.raises(AssertionError):
-    create_augmented_batch(image, 3)
-    create_augmented_batch(image, 31)
-
-  # correct sizes
-  def test(batch_size):
-    aug_images_tf = create_augmented_batch(image, batch_size)
-    aug_images = sess.run(aug_images_tf)
-    assert aug_images.shape == (batch_size,64,64,3)
-
-  test(32)
-  test(4)
-  test(1)
-
-  # deterministic behavior
-  def test2(batch_size):
-    aug_images_1_tf = create_augmented_batch(image, batch_size)
-    aug_images_1 = sess.run(aug_images_1_tf)
-
-    aug_images_2_tf = create_augmented_batch(image, batch_size)
-    aug_images_2 = sess.run(aug_images_2_tf)
-
-    assert np.array_equal(aug_images_1, aug_images_2)
-
-  test2(32)
-  test2(4)
-  test2(1)
-
-
-def test_compute_l2_reg():
-  reset()
-
-  # create model with a mix of pretrained and new weights
-  # NOTE: the pretrained layers will be initialized by Keras on creation, while the new Dense
-  # layer will remain uninitialized
-  input_shape = (224,224,3)
-  inputs = Input(shape=input_shape)
-  x = Dense(1)(inputs)
-  logits = Dense(1)(x)
-  model = Model(inputs=inputs, outputs=logits, name="model")
-
-  for l in model.layers:
-    l.trainable = True
-
-  sess = K.get_session()
-
-  # all layers
-  l2_reg = compute_l2_reg(model)
-  correct_l2_reg = tf.nn.l2_loss(model.layers[1].kernel) + tf.nn.l2_loss(model.layers[2].kernel)
-  l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
-  assert np.array_equal(l2_reg_val, correct_l2_reg_val)
-
-  # subset of layers
-  model.layers[1].trainable = False
-  l2_reg = compute_l2_reg(model)
-  correct_l2_reg = tf.nn.l2_loss(model.layers[2].kernel)
-  l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
-  assert np.array_equal(l2_reg_val, correct_l2_reg_val)
 
