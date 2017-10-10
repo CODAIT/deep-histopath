@@ -383,6 +383,25 @@ def create_model(model_name, input_shape, images):
   return model, model_base
 
 
+def marginalize(logits):
+  """Marginalize over injected noise at test time.
+
+  This implements noise marginalization by averaging predictions over a
+  batch of augmented versions of a single image.  This is only performed
+  at test time when `K.learning_phase() == 0`.
+
+  Args:
+    logits: A Tensor containing predictions for a batch of augmented
+      variants of a single image.
+
+  Returns:
+    A Tensor with a single prediction.
+  """
+  avg_logits = tf.reduce_mean(logits, axis=0, keep_dims=True, name="avg_logits")
+  logits = tf.cond(tf.logical_not(K.learning_phase()), lambda: avg_logits, lambda: logits)
+  return logits
+
+
 # utils
 
 def create_resettable_metric(metric, scope, **metric_kwargs):  # prob safer to only allow kwargs
@@ -528,20 +547,15 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
   with tf.name_scope("model"):
     model, model_base = create_model(model_name, input_shape, images)
 
-    # TODO: extract this into a function with tests
-    # compute logits and predictions
+    # compute logits and predictions, possibly with marginalization
     # NOTE: tf prefers to feed logits into a combined sigmoid and logistic loss function for
     # numerical stability
-    # NOTE: preds has an implicit threshold at 0.5
-    logits = model.output
-    # use noise marginalization at test time, i.e., average predictions over a batch of augmented
-    # versions of a single image
-    avg_logits = tf.reduce_mean(logits, axis=0, keep_dims=True, name="avg_logits")
-    logits = tf.cond(tf.logical_and(marginalization, tf.logical_not(K.learning_phase())),
-        lambda: avg_logits, lambda: logits)
+    if marginalization:
+      logits = marginalize(model.output)  # will marginalize at test time
+    else:
+      logits = model.output
     probs = tf.nn.sigmoid(logits, name="probs")
-    preds = tf.round(probs, name="preds")
-    num_preds = tf.shape(preds)[0]
+    preds = tf.round(probs, name="preds")  # implicit threshold at 0.5
 
   # loss
   with tf.name_scope("loss"):
@@ -629,6 +643,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     normal_images = tf.boolean_mask(images, neg_mask)
     mitosis_filenames = tf.boolean_mask(filenames, pos_mask)
     normal_filenames = tf.boolean_mask(filenames, neg_mask)
+    num_preds = tf.shape(preds)[0]
 
   with tf.name_scope("images"):
     tf.summary.image("mitosis", unnormalize(mitosis_images, model_name), 1,
@@ -1078,6 +1093,28 @@ def test_create_augmented_batch():
   test2(32)
   test2(4)
   test2(1)
+
+
+def test_marginalize():
+  import pytest
+  reset()
+  sess = K.get_session()
+
+  shape = (32, 1)
+  logits = np.random.randn(*shape)  # will be embedded directly in tf graph
+  marg_logits = marginalize(logits)  # tf ops
+
+  # forgot K.learning_phase()
+  with pytest.raises(tf.errors.InvalidArgumentError):
+    l = sess.run(marg_logits)
+
+  # train time
+  l = sess.run(marg_logits, feed_dict={K.learning_phase(): 1})
+  assert l.shape == shape
+
+  # test time
+  l = sess.run(marg_logits, feed_dict={K.learning_phase(): 0})
+  assert l.shape == (1, 1)
 
 
 # model
