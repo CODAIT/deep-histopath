@@ -276,6 +276,113 @@ def compute_l2_reg(model):
   return l2_loss
 
 
+def create_model(model_name, input_shape, images):
+  """Create a model.
+
+  Args:
+    model_name: String indicating the model to use in ("vgg", "vgg19",
+      "resnet", "logreg").
+    input_shape: 3-Tuple containing the shape of a single image.
+    images: An image Tensor of shape (n,h,w,c).
+
+  Returns:
+    An unfrozen Keras Model in which `images` is the input tensor, and
+    another Model object representing the base model when using
+    pretrained models.
+  """
+  if model_name == "logreg":
+    # logistic regression classifier
+    model_base = keras.models.Sequential()  # dummy since we aren't fine-tuning this model
+    inputs = Input(shape=input_shape, tensor=images)
+    x = Flatten()(inputs)
+    # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
+    logits = Dense(1, kernel_initializer="glorot_normal")(x)
+    model_tower = Model(inputs=inputs, outputs=logits, name="model")
+
+  elif model_name == "vgg":
+    # create a model by replacing the classifier of a VGG16 model with a new classifier specific
+    # to the breast cancer problem
+    # recommend fine-tuning last 4 layers
+    #with tf.device("/cpu"):
+    #inputs = Input(shape=input_shape)
+    model_base = VGG16(include_top=False, input_shape=input_shape, input_tensor=images)  #inputs)
+    inputs = model_base.inputs
+    x = model_base.output
+    x = Flatten()(x)
+    #x = GlobalAveragePooling2D()(x)
+    #x = Dropout(0.5)(x)
+    #x = Dropout(0.1)(x)
+    #x = Dense(256, activation='relu', name='fc1')(x)
+    #x = Dense(256, kernel_initializer="he_normal",
+    #    kernel_regularizer=keras.regularizers.l2(l2))(x)
+    #x = Dropout(0.5)(x)
+    #x = Dropout(0.1)(x)
+    #x = Dense(256, activation='relu', name='fc2')(x)
+    #x = Dense(256, kernel_initializer="he_normal",
+    #    kernel_regularizer=keras.regularizers.l2(l2))(x)
+    # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
+    logits = Dense(1, kernel_initializer="glorot_normal")(x)
+    model_tower = Model(inputs=inputs, outputs=logits, name="model")
+
+  elif model_name == "vgg19":
+    # create a model by replacing the classifier of a VGG19 model with a new classifier specific
+    # to the breast cancer problem
+    # recommend fine-tuning last 4 layers
+    #with tf.device("/cpu"):
+    #inputs = Input(shape=input_shape)
+    model_base = VGG19(include_top=False, input_shape=input_shape, input_tensor=images)  #inputs)
+    inputs = model_base.inputs
+    x = model_base.output
+    x = Flatten()(x)
+    # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
+    logits = Dense(1, kernel_initializer="glorot_normal")(x)
+    model_tower = Model(inputs=inputs, outputs=logits, name="model")
+
+  elif model_name == "resnet":
+    # create a model by replacing the classifier of a ResNet50 model with a new classifier
+    # specific to the breast cancer problem
+    # recommend fine-tuning last 11 (stage 5 block c), 21 (stage 5 blocks b & c), or 33 (stage
+    # 5 blocks a,b,c) layers
+    #with tf.device("/cpu"):
+    # NOTE: there is an issue in keras with using batch norm with model templating, i.e.,
+    # defining a model with generic inputs and then calling it on a tensor.  the issue stems from
+    # batch norm not being well defined for shared settings, but it makes it quite annoying in
+    # this context.  to "fix" it, we define it by directly passing in the `images` tensor
+    # https://github.com/fchollet/keras/issues/2827
+    # TODO: find out if it will be possible to save this model and load it in a different context
+    #inputs = Input(shape=input_shape)
+    model_base = ResNet50(include_top=False, input_shape=input_shape, input_tensor=images) #inputs)
+    inputs = model_base.inputs
+    x = model_base.output
+    x = Flatten()(x)
+    #x = GlobalAveragePooling2D()(x)
+    # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
+    logits = Dense(1, kernel_initializer="glorot_normal")(x)
+    model_tower = Model(inputs=inputs, outputs=logits, name="model")
+
+  else:
+    raise Exception("model name unknown: {}".format(model_name))
+
+  # TODO: add this when it's necessary, and move to a separate function
+  ## Multi-GPU exploitation via a linear combination of GPU loss functions.
+  #ins = []
+  #outs = []
+  #for i in range(num_gpus):
+  #  with tf.device("/gpu:{}".format(i)):
+  #    x = Input(shape=input_shape)  # split of batch
+  #    out = resnet50(x)  # run split on shared model
+  #    ins.append(x)
+  #    outs.append(out)
+  #model = Model(inputs=ins, outputs=outs)  # multi-GPU, data-parallel model
+  model = model_tower
+
+  # unfreeze all model layers.
+  for layer in model.layers[1:]:  # don't include input layer
+    layer.trainable = True
+
+  return model, model_base
+
+
 # utils
 
 def create_resettable_metric(metric, scope, **metric_kwargs):  # prob safer to only allow kwargs
@@ -414,112 +521,14 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
                                                        train_dataset.output_shapes)
     train_init_op = iterator.make_initializer(train_dataset)
     val_init_op = iterator.make_initializer(val_dataset)
-    input_shape = (patch_size, patch_size, 3)
     images, labels, filenames = iterator.get_next()
-
-    actual_batch_size = tf.shape(images)[0]
-    percent_pos = tf.reduce_mean(labels)  # positive labels are 1
-    pos_mask = tf.cast(labels, tf.bool)
-    neg_mask = tf.logical_not(pos_mask)
-    mitosis_images = tf.boolean_mask(images, pos_mask)
-    normal_images = tf.boolean_mask(images, neg_mask)
-    mitosis_filenames = tf.boolean_mask(filenames, pos_mask)
-    normal_filenames = tf.boolean_mask(filenames, neg_mask)
+    input_shape = (patch_size, patch_size, 3)
 
   # models
   with tf.name_scope("model"):
-    # TODO: extract this out into into functions
+    model, model_base = create_model(model_name, input_shape, images)
 
-    if model_name == "logreg":
-      # logistic regression classifier
-      model_base = keras.models.Sequential()  # dummy since we aren't fine-tuning this model
-      inputs = Input(shape=input_shape, tensor=images)
-      x = Flatten()(inputs)
-      # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
-      logits = Dense(1, kernel_initializer="glorot_normal")(x)
-      model_tower = Model(inputs=inputs, outputs=logits, name="model")
-
-    elif model_name == "vgg":
-      # create a model by replacing the classifier of a VGG16 model with a new classifier specific
-      # to the breast cancer problem
-      # recommend fine-tuning last 4 layers
-      #with tf.device("/cpu"):
-      #inputs = Input(shape=input_shape)
-      model_base = VGG16(include_top=False, input_shape=input_shape, input_tensor=images)  #inputs)
-      inputs = model_base.inputs
-      x = model_base.output
-      x = Flatten()(x)
-      #x = GlobalAveragePooling2D()(x)
-      #x = Dropout(0.5)(x)
-      #x = Dropout(0.1)(x)
-      #x = Dense(256, activation='relu', name='fc1')(x)
-      #x = Dense(256, kernel_initializer="he_normal",
-      #    kernel_regularizer=keras.regularizers.l2(l2))(x)
-      #x = Dropout(0.5)(x)
-      #x = Dropout(0.1)(x)
-      #x = Dense(256, activation='relu', name='fc2')(x)
-      #x = Dense(256, kernel_initializer="he_normal",
-      #    kernel_regularizer=keras.regularizers.l2(l2))(x)
-      # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
-      logits = Dense(1, kernel_initializer="glorot_normal")(x)
-      model_tower = Model(inputs=inputs, outputs=logits, name="model")
-
-    elif model_name == "vgg19":
-      # create a model by replacing the classifier of a VGG19 model with a new classifier specific
-      # to the breast cancer problem
-      # recommend fine-tuning last 4 layers
-      #with tf.device("/cpu"):
-      #inputs = Input(shape=input_shape)
-      model_base = VGG19(include_top=False, input_shape=input_shape, input_tensor=images)  #inputs)
-      inputs = model_base.inputs
-      x = model_base.output
-      x = Flatten()(x)
-      # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
-      logits = Dense(1, kernel_initializer="glorot_normal")(x)
-      model_tower = Model(inputs=inputs, outputs=logits, name="model")
-
-    elif model_name == "resnet":
-      # create a model by replacing the classifier of a ResNet50 model with a new classifier
-      # specific to the breast cancer problem
-      # recommend fine-tuning last 11 (stage 5 block c), 21 (stage 5 blocks b & c), or 33 (stage
-      # 5 blocks a,b,c) layers
-      #with tf.device("/cpu"):
-      # NOTE: there is an issue in keras with using batch norm with model templating, i.e.,
-      # defining a model with generic inputs and then calling it on a tensor.  the issue stems from
-      # batch norm not being well defined for shared settings, but it makes it quite annoying in
-      # this context.  to "fix" it, we define it by directly passing in the `images` tensor
-      # https://github.com/fchollet/keras/issues/2827
-      # TODO: find out if it will be possible to save this model and load it in a different context
-      #inputs = Input(shape=input_shape)
-      model_base = ResNet50(include_top=False, input_shape=input_shape, input_tensor=images) #inputs)
-      inputs = model_base.inputs
-      x = model_base.output
-      x = Flatten()(x)
-      #x = GlobalAveragePooling2D()(x)
-      # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
-      logits = Dense(1, kernel_initializer="glorot_normal")(x)
-      model_tower = Model(inputs=inputs, outputs=logits, name="model")
-
-    else:
-      raise Exception("model name unknown: {}".format(model_name))
-
-    # TODO: add this when it's necessary, and move to a separate function
-    ## Multi-GPU exploitation via a linear combination of GPU loss functions.
-    #ins = []
-    #outs = []
-    #for i in range(num_gpus):
-    #  with tf.device("/gpu:{}".format(i)):
-    #    x = Input(shape=input_shape)  # split of batch
-    #    out = resnet50(x)  # run split on shared model
-    #    ins.append(x)
-    #    outs.append(out)
-    #model = Model(inputs=ins, outputs=outs)  # multi-GPU, data-parallel model
-    model = model_tower
-
-    # unfreeze all model layers.
-    for layer in model.layers[1:]:  # don't include input layer
-      layer.trainable = True
-
+    # TODO: extract this into a function with tests
     # compute logits and predictions
     # NOTE: tf prefers to feed logits into a combined sigmoid and logistic loss function for
     # numerical stability
@@ -534,18 +543,9 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     preds = tf.round(probs, name="preds")
     num_preds = tf.shape(preds)[0]
 
-    # false-positive & false-negative cases
-    pos_preds_mask = tf.cast(tf.squeeze(preds, axis=1), tf.bool)
-    neg_preds_mask = tf.logical_not(pos_preds_mask)
-    fp_mask = tf.logical_and(pos_preds_mask, neg_mask)
-    fn_mask = tf.logical_and(neg_preds_mask, pos_mask)
-    fp_images = tf.boolean_mask(images, fp_mask)
-    fn_images = tf.boolean_mask(images, fn_mask)
-    fp_filenames = tf.boolean_mask(filenames, fp_mask)
-    fn_filenames = tf.boolean_mask(filenames, fn_mask)
-
   # loss
   with tf.name_scope("loss"):
+    # TODO: extract this into a function with tests
     # use noise marginalization at test time
     labels = tf.cond(tf.logical_and(marginalization, tf.logical_not(K.learning_phase())),
         lambda: labels[0], lambda: labels)
@@ -555,7 +555,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
 
   # optim
   with tf.name_scope("optim"):
-    # TODO: extract this out into a function with tests
+    # TODO: extract this into a function with tests
     # TODO: rework the `finetune_layers` param to include starting from the beg/end
     # classifier
     # - freeze all pre-trained model layers.
@@ -589,6 +589,17 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
 
   # metrics
   with tf.name_scope("metrics"):
+    # TODO: extract this into a function with tests
+    # false-positive & false-negative cases
+    pos_preds_mask = tf.cast(tf.squeeze(preds, axis=1), tf.bool)
+    neg_preds_mask = tf.logical_not(pos_preds_mask)
+    fp_mask = tf.logical_and(pos_preds_mask, neg_mask)
+    fn_mask = tf.logical_and(neg_preds_mask, pos_mask)
+    fp_images = tf.boolean_mask(images, fp_mask)
+    fn_images = tf.boolean_mask(images, fn_mask)
+    fp_filenames = tf.boolean_mask(filenames, fp_mask)
+    fn_filenames = tf.boolean_mask(filenames, fn_mask)
+
     mean_loss, mean_loss_update_op, mean_loss_reset_op = create_resettable_metric(tf.metrics.mean,
         'mean_loss', values=loss)
     acc, acc_update_op, acc_reset_op = create_resettable_metric(tf.metrics.accuracy,
@@ -604,10 +615,21 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     metric_reset_ops = tf.group(mean_loss_reset_op, acc_reset_op, ppv_reset_op, sens_reset_op)
 
   # tensorboard summaries
+  # TODO: extract this into a function
   # NOTE: tensorflow is annoying when it comes to name scopes, so sometimes the name needs to be
   # hardcoded as a prefix instead of a proper name scope if that name was used as a name scope
   # earlier. otherwise, a numeric suffix will be appended to the name.
   # general minibatch summaries
+  with tf.name_scope("summary"):
+    actual_batch_size = tf.shape(images)[0]
+    percent_pos = tf.reduce_mean(labels)  # positive labels are 1
+    pos_mask = tf.cast(labels, tf.bool)
+    neg_mask = tf.logical_not(pos_mask)
+    mitosis_images = tf.boolean_mask(images, pos_mask)
+    normal_images = tf.boolean_mask(images, neg_mask)
+    mitosis_filenames = tf.boolean_mask(filenames, pos_mask)
+    normal_filenames = tf.boolean_mask(filenames, neg_mask)
+
   with tf.name_scope("images"):
     tf.summary.image("mitosis", unnormalize(mitosis_images, model_name), 1,
         collections=["minibatch", "minibatch_val"])
@@ -624,6 +646,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     tf.summary.text("false-negative", fn_filenames, collections=["minibatch", "minibatch_val"])
   tf.summary.histogram("data/images", images, collections=["minibatch", "minibatch_val"])
   tf.summary.histogram("data/labels", labels, collections=["minibatch", "minibatch_val"])
+
   for layer in model.layers:
     for weight in layer.weights:
       tf.summary.histogram(weight.name, weight, collections=["minibatch"])
@@ -632,6 +655,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
       tf.summary.histogram(layer_name, layer.output, collections=["minibatch"])
   tf.summary.histogram("model/probs", probs, collections=["minibatch"])
   tf.summary.histogram("model/preds", preds, collections=["minibatch"])
+
   with tf.name_scope("minibatch"):
     tf.summary.scalar("loss", loss, collections=["minibatch"])
     tf.summary.scalar("batch_size", actual_batch_size, collections=["minibatch", "minibatch_val"])
@@ -639,6 +663,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     tf.summary.scalar("percent_positive", percent_pos, collections=["minibatch"])
     tf.summary.scalar("learning_phase", tf.to_int32(K.learning_phase()),
         collections=["minibatch", "minibatch_val"])
+
   # TODO: gradient histograms
   # TODO: first layer convolution kernels as images
   minibatch_summaries = tf.summary.merge_all("minibatch")
@@ -675,6 +700,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     with open(global_step_epoch_filename, "rb") as f:
       global_step, global_epoch = pickle.load(f)
 
+  # TODO: extract this into a function with tests
   # new classifier layers + fine-tuning combined training loop
   for train_op, epochs in [(clf_train_op, clf_epochs), (finetune_train_op, finetune_epochs)]:
     for _ in range(global_epoch, global_epoch+epochs):  # allow for resuming of training
@@ -1085,6 +1111,39 @@ def test_compute_l2_reg():
   correct_l2_reg = tf.nn.l2_loss(model.layers[2].kernel)
   l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
   assert np.array_equal(l2_reg_val, correct_l2_reg_val)
+
+
+def test_create_model():
+  input_shape = (64, 64, 3)
+
+  def test(model_name, base_layers):
+    x = tf.placeholder(tf.float32, [None, *input_shape])
+    model, model_base = create_model(model_name, input_shape, x)
+    assert model.input_shape == (None, *input_shape)
+    assert model.input == x
+    assert len(model_base.layers) == base_layers
+    assert model.layers[:len(model_base.layers)] == model_base.layers
+    assert model.output_shape == (None, 1)
+
+  # logreg
+  reset()
+  sess = K.get_session()
+  test("logreg", 0)
+
+  # vgg
+  reset()
+  sess = K.get_session()
+  test("vgg", 19)
+
+  # vgg19
+  reset()
+  sess = K.get_session()
+  test("vgg19", 22)
+
+  # resnet
+  reset()
+  sess = K.get_session()
+  test("resnet", 174)
 
 
 # utils
