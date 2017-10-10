@@ -133,7 +133,7 @@ def get_20x_zoom_level(slide, generator):
     # generator.
     offset = math.floor((mag / 20) / 2)
     level = highest_zoom_level - offset
-  except ValueError:
+  except (ValueError, KeyError) as e:
     # In case the slide magnification level is unknown, just
     # use the highest resolution.
     level = highest_zoom_level
