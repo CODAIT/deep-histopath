@@ -686,7 +686,6 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     fp_filenames = tf.boolean_mask(filenames, fp_mask)
     fn_filenames = tf.boolean_mask(filenames, fn_mask)
 
-
   with tf.name_scope("images"):
     tf.summary.image("mitosis", unnormalize(mitosis_images, model_name), 1,
         collections=["minibatch", "minibatch_val"])
@@ -823,7 +822,10 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
         print("Saved model file to {}".format(keras_filename))
 
 
-if __name__ == "__main__":
+def main(args=None):
+  """Command line interface for this script.  Can optionally pass in a
+  list of strings to simulate command line usage.
+  """
   # parse args
   parser = argparse.ArgumentParser()
   parser.add_argument("--patches_path", default=os.path.join("data", "mitoses", "patches"),
@@ -888,9 +890,9 @@ if __name__ == "__main__":
   parser.add_argument("--resume", default=False, action="store_true",
       help="resume training from a checkpoint (default: %(default)s)")
 
-  args = parser.parse_args()
+  args = parser.parse_args(args)
 
-  # set any other defaults
+  # set train/val paths
   train_path = os.path.join(args.patches_path, "train")
   val_path = os.path.join(args.patches_path, "val")
 
@@ -924,6 +926,10 @@ if __name__ == "__main__":
       args.val_batch_size, args.clf_epochs, args.finetune_epochs, args.clf_lr, args.finetune_lr,
       args.finetune_momentum, args.finetune_layers, args.l2, args.augment, args.marginalize,
       args.threads, args.prefetch_batches, args.log_interval, args.checkpoint, args.resume)
+
+
+if __name__ == "__main__":
+  main()
 
 
 # ---
