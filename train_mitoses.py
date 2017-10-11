@@ -258,18 +258,21 @@ def create_dataset(path, model_name, patch_size, batch_size, shuffle, augmentati
 
 # model
 
-def compute_l2_reg(model):
+def compute_l2_reg_loss(model, include_frozen=False):
   """Compute L2 loss of trainable model weights, excluding biases.
 
   Args:
     model: A Keras Model object.
+    include_frozen: Boolean for whether or not to ignore frozen layers.
 
   Returns:
-    The L2 regularization loss of all trainable model weights.
+    The L2 regularization loss of all trainable (i.e., unfrozen) model
+    weights, unless `include_frozen` is True, in which case all weights
+    are used.
   """
   weights = []
   for layer in model.layers:
-    if layer.trainable:
+    if layer.trainable or include_frozen:
       if hasattr(layer, 'kernel'):
         weights.append(layer.kernel)
   l2_loss = tf.add_n([tf.nn.l2_loss(w) for w in weights])
@@ -349,8 +352,6 @@ def create_model(model_name, input_shape, images):
     # batch norm not being well defined for shared settings, but it makes it quite annoying in
     # this context.  to "fix" it, we define it by directly passing in the `images` tensor
     # https://github.com/fchollet/keras/issues/2827
-    # TODO: find out if it will be possible to save this model and load it in a different context
-    #inputs = Input(shape=input_shape)
     model_base = ResNet50(include_top=False, input_shape=input_shape, input_tensor=images) #inputs)
     inputs = model_base.inputs
     x = model_base.output
@@ -400,6 +401,22 @@ def marginalize(logits):
   avg_logits = tf.reduce_mean(logits, axis=0, keep_dims=True, name="avg_logits")
   logits = tf.cond(tf.logical_not(K.learning_phase()), lambda: avg_logits, lambda: logits)
   return logits
+
+
+def compute_data_loss(labels, logits):
+  """Compute the mean logistic loss.
+
+  Args:
+    labels: A Tensor of shape (n, 1) containing a batch of labels.
+    logits: A Tensor of shape (n, 1) containing a batch of pre-sigmoid
+      prediction values.
+
+  Returns:
+    A scalar Tensor representing the mean logistic loss.
+  """
+  loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
+    labels=tf.reshape(labels, [-1, 1]), logits=logits))
+  return loss
 
 
 # utils
@@ -559,13 +576,12 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
 
   # loss
   with tf.name_scope("loss"):
-    # TODO: extract this into a function with tests
-    # use noise marginalization at test time
-    labels = tf.cond(tf.logical_and(marginalization, tf.logical_not(K.learning_phase())),
-        lambda: labels[0], lambda: labels)
-    base_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
-      labels=tf.reshape(labels, [-1, 1]), logits=logits))
-    loss = base_loss + l2*compute_l2_reg(model)  # including all weight regularization
+    if marginalization:
+      # use noise marginalization at test time
+      labels = tf.cond(tf.logical_not(K.learning_phase()), lambda: labels[0], lambda: labels)
+    data_loss = compute_data_loss(labels, logits)
+    reg_loss = compute_l2_reg_loss(model, include_frozen=True)  # including all weights
+    loss = data_loss + l2*reg_loss
 
   # optim
   with tf.name_scope("optim"):
@@ -576,7 +592,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     for layer in model_base.layers:
       layer.trainable = False
     # add any weight regularization to the base loss for unfrozen layers:
-    clf_loss = base_loss + l2*compute_l2_reg(model)  # including all weight regularization
+    clf_loss = data_loss + l2*compute_l2_reg_loss(model)  # including all weight regularization
     clf_opt = tf.train.AdamOptimizer(clf_lr)
     clf_grads_and_vars = clf_opt.compute_gradients(clf_loss, var_list=model.trainable_weights)
     #clf_train_op = opt.minimize(clf_loss, var_list=model.trainable_weights)
@@ -592,7 +608,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
       for layer in model_base.layers[-finetune_layers:]:
         layer.trainable = True
     # add any weight regularization to the base loss for unfrozen layers:
-    finetune_loss = base_loss + l2*compute_l2_reg(model)  # including all weight regularization
+    finetune_loss = data_loss + l2*compute_l2_reg_loss(model)  # including all weight regularization
     finetune_opt = tf.train.MomentumOptimizer(finetune_lr, finetune_momentum, use_nesterov=True)
     finetune_grads_and_vars = finetune_opt.compute_gradients(finetune_loss,
         var_list=model.trainable_weights)
@@ -1119,7 +1135,7 @@ def test_marginalize():
 
 # model
 
-def test_compute_l2_reg():
+def test_compute_l2_reg_loss():
   reset()
 
   # create model with a mix of pretrained and new weights
@@ -1137,15 +1153,22 @@ def test_compute_l2_reg():
   sess = K.get_session()
 
   # all layers
-  l2_reg = compute_l2_reg(model)
+  l2_reg = compute_l2_reg_loss(model)
   correct_l2_reg = tf.nn.l2_loss(model.layers[1].kernel) + tf.nn.l2_loss(model.layers[2].kernel)
   l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
   assert np.array_equal(l2_reg_val, correct_l2_reg_val)
 
   # subset of layers
   model.layers[1].trainable = False
-  l2_reg = compute_l2_reg(model)
+  l2_reg = compute_l2_reg_loss(model)
   correct_l2_reg = tf.nn.l2_loss(model.layers[2].kernel)
+  l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
+  assert np.array_equal(l2_reg_val, correct_l2_reg_val)
+
+  # include frozen layers
+  model.layers[1].trainable = False
+  l2_reg = compute_l2_reg_loss(model, True)
+  correct_l2_reg = tf.nn.l2_loss(model.layers[1].kernel) + tf.nn.l2_loss(model.layers[2].kernel)
   l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
   assert np.array_equal(l2_reg_val, correct_l2_reg_val)
 
@@ -1181,6 +1204,21 @@ def test_create_model():
   reset()
   sess = K.get_session()
   test("resnet", 174)
+
+
+def test_compute_data_loss():
+  reset()
+  sess = K.get_session()
+
+  shape = (32, 1)
+  logits = np.random.rand(*shape).astype(np.float32)
+  labels = np.random.binomial(1, 0.5, shape).astype(np.float32)
+  assert logits.shape == labels.shape == shape
+
+  loss = compute_data_loss(labels, logits)
+  loss_np = sess.run(loss)
+  assert loss_np.shape == ()
+  assert type(loss_np) == np.float32
 
 
 # utils
