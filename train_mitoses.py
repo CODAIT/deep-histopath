@@ -192,6 +192,27 @@ def create_augmented_batch(image, batch_size):
   return images
 
 
+def marginalize(x):
+  """Marginalize over injected noise at test time.
+
+  This implements noise marginalization by averaging over a batch of
+  values.  Typically, this would be used with logits for a batch of
+  augmented versions of a single image, or for the associated batch
+  of labels.  This is only performed at test time when
+  `K.learning_phase() == 0`.
+
+  Args:
+    x: A Tensor of shape (n,...).
+
+  Returns:
+    A Tensor of shape (1, ...) containing the average over the batch
+    dimension.
+  """
+  avg_x = tf.reduce_mean(x, axis=0, keep_dims=True, name="avg_x")
+  x = tf.cond(tf.logical_not(K.learning_phase()), lambda: avg_x, lambda: x)
+  return x
+
+
 def create_dataset(path, model_name, patch_size, batch_size, shuffle, augmentation, marginalization,
     threads, prefetch_batches):
   """Create a dataset.
@@ -384,25 +405,6 @@ def create_model(model_name, input_shape, images):
   return model, model_base
 
 
-def marginalize(logits):
-  """Marginalize over injected noise at test time.
-
-  This implements noise marginalization by averaging predictions over a
-  batch of augmented versions of a single image.  This is only performed
-  at test time when `K.learning_phase() == 0`.
-
-  Args:
-    logits: A Tensor containing predictions for a batch of augmented
-      variants of a single image.
-
-  Returns:
-    A Tensor with a single prediction.
-  """
-  avg_logits = tf.reduce_mean(logits, axis=0, keep_dims=True, name="avg_logits")
-  logits = tf.cond(tf.logical_not(K.learning_phase()), lambda: avg_logits, lambda: logits)
-  return logits
-
-
 def compute_data_loss(labels, logits):
   """Compute the mean logistic loss.
 
@@ -560,6 +562,9 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     images, labels, filenames = iterator.get_next()
     input_shape = (patch_size, patch_size, 3)
 
+    if marginalize:
+      labels = marginalize(labels)  # will marginalize at test time
+
   # models
   with tf.name_scope("model"):
     model, model_base = create_model(model_name, input_shape, images)
@@ -576,9 +581,6 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
 
   # loss
   with tf.name_scope("loss"):
-    if marginalization:
-      # use noise marginalization at test time
-      labels = tf.cond(tf.logical_not(K.learning_phase()), lambda: labels[0], lambda: labels)
     data_loss = compute_data_loss(labels, logits)
     reg_loss = compute_l2_reg_loss(model, include_frozen=True)  # including all weights
     loss = data_loss + l2*reg_loss
@@ -1127,10 +1129,28 @@ def test_marginalize():
   # train time
   l = sess.run(marg_logits, feed_dict={K.learning_phase(): 1})
   assert l.shape == shape
+  assert np.array_equal(l, logits)
 
   # test time
   l = sess.run(marg_logits, feed_dict={K.learning_phase(): 0})
   assert l.shape == (1, 1)
+  assert np.allclose(l.squeeze(), np.mean(logits))
+
+  # equal labels
+  reset()
+  sess = K.get_session()
+  labels = np.full(shape, 1)
+  marg_labels = marginalize(labels)
+
+  # train time
+  l = sess.run(marg_labels, feed_dict={K.learning_phase(): 1})
+  assert l.shape == shape
+  assert np.array_equal(l, labels)
+
+  # test time
+  l = sess.run(marg_labels, feed_dict={K.learning_phase(): 0})
+  assert l.shape == (1, 1)
+  assert np.allclose(l.squeeze(), 1)
 
 
 # model
