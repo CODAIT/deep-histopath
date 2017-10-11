@@ -279,27 +279,6 @@ def create_dataset(path, model_name, patch_size, batch_size, shuffle, augmentati
 
 # model
 
-def compute_l2_reg_loss(model, include_frozen=False):
-  """Compute L2 loss of trainable model weights, excluding biases.
-
-  Args:
-    model: A Keras Model object.
-    include_frozen: Boolean for whether or not to ignore frozen layers.
-
-  Returns:
-    The L2 regularization loss of all trainable (i.e., unfrozen) model
-    weights, unless `include_frozen` is True, in which case all weights
-    are used.
-  """
-  weights = []
-  for layer in model.layers:
-    if layer.trainable or include_frozen:
-      if hasattr(layer, 'kernel'):
-        weights.append(layer.kernel)
-  l2_loss = tf.add_n([tf.nn.l2_loss(w) for w in weights])
-  return l2_loss
-
-
 def create_model(model_name, input_shape, images):
   """Create a model.
 
@@ -419,6 +398,61 @@ def compute_data_loss(labels, logits):
   loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
     labels=tf.reshape(labels, [-1, 1]), logits=logits))
   return loss
+
+
+def compute_l2_reg_loss(model, include_frozen=False):
+  """Compute L2 loss of trainable model weights, excluding biases.
+
+  Args:
+    model: A Keras Model object.
+    include_frozen: Boolean for whether or not to ignore frozen layers.
+
+  Returns:
+    The L2 regularization loss of all trainable (i.e., unfrozen) model
+    weights, unless `include_frozen` is True, in which case all weights
+    are used.
+  """
+  weights = []
+  for layer in model.layers:
+    if layer.trainable or include_frozen:
+      if hasattr(layer, 'kernel'):
+        weights.append(layer.kernel)
+  l2_loss = tf.add_n([tf.nn.l2_loss(w) for w in weights])
+  return l2_loss
+
+
+def compute_metrics(loss, labels, preds):
+  """Compute metrics.
+
+  This creates ops that compute metrics in a streaming fashion.
+
+  Args:
+    loss: A Tensor representing the current batch mean loss.
+    labels: A Tensor of shape (n, 1) containing a batch of labels.
+    preds: A Tensor of shape (n, 1) containing a batch of prediction
+      values.
+
+  Returns:
+    A tuple of mean loss, accuracy, positive predictive value
+    (precision), sensitivity (recall), F1, a grouped metrics update op,
+    and a group metrics reset op.
+  """
+  # TODO: think about converting this to a class
+  mean_loss, mean_loss_update_op, mean_loss_reset_op = create_resettable_metric(tf.metrics.mean,
+      'mean_loss', values=loss)
+  acc, acc_update_op, acc_reset_op = create_resettable_metric(tf.metrics.accuracy,
+      'acc', labels=labels, predictions=preds)
+  ppv, ppv_update_op, ppv_reset_op = create_resettable_metric(tf.metrics.precision,
+      'ppv', labels=labels, predictions=preds)
+  sens, sens_update_op, sens_reset_op = create_resettable_metric(tf.metrics.recall,
+      'sens', labels=labels, predictions=preds)
+  f1 = 2 * (ppv * sens) / (ppv + sens)
+
+  # combine all reset & update ops
+  metric_update_ops = tf.group(mean_loss_update_op, acc_update_op, ppv_update_op, sens_update_op)
+  metric_reset_ops = tf.group(mean_loss_reset_op, acc_reset_op, ppv_reset_op, sens_reset_op)
+
+  return mean_loss, acc, ppv, sens, f1, metric_update_ops, metric_reset_ops
 
 
 # utils
@@ -621,7 +655,27 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
 
   # metrics
   with tf.name_scope("metrics"):
-    # TODO: extract this into a function with tests
+    mean_loss, acc, ppv, sens, f1, metric_update_ops, metric_reset_ops = compute_metrics(loss,
+        labels, preds)
+
+  # tensorboard summaries
+  # TODO: extract this into a function
+  # NOTE: tensorflow is annoying when it comes to name scopes, so sometimes the name needs to be
+  # hardcoded as a prefix instead of a proper name scope if that name was used as a name scope
+  # earlier. otherwise, a numeric suffix will be appended to the name.
+  # general minibatch summaries
+  with tf.name_scope("summary"):
+    # data
+    actual_batch_size = tf.shape(images)[0]
+    percent_pos = tf.reduce_mean(labels)  # positive labels are 1
+    pos_mask = tf.cast(labels, tf.bool)
+    neg_mask = tf.logical_not(pos_mask)
+    mitosis_images = tf.boolean_mask(images, pos_mask)
+    normal_images = tf.boolean_mask(images, neg_mask)
+    mitosis_filenames = tf.boolean_mask(filenames, pos_mask)
+    normal_filenames = tf.boolean_mask(filenames, neg_mask)
+    num_preds = tf.shape(preds)[0]
+
     # false-positive & false-negative cases
     pos_preds_mask = tf.cast(tf.squeeze(preds, axis=1), tf.bool)
     neg_preds_mask = tf.logical_not(pos_preds_mask)
@@ -632,36 +686,6 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     fp_filenames = tf.boolean_mask(filenames, fp_mask)
     fn_filenames = tf.boolean_mask(filenames, fn_mask)
 
-    mean_loss, mean_loss_update_op, mean_loss_reset_op = create_resettable_metric(tf.metrics.mean,
-        'mean_loss', values=loss)
-    acc, acc_update_op, acc_reset_op = create_resettable_metric(tf.metrics.accuracy,
-        'acc', labels=labels, predictions=preds)
-    ppv, ppv_update_op, ppv_reset_op = create_resettable_metric(tf.metrics.precision,
-        'ppv', labels=labels, predictions=preds)
-    sens, sens_update_op, sens_reset_op = create_resettable_metric(tf.metrics.recall,
-        'sens', labels=labels, predictions=preds)
-    f1 = 2 * (ppv * sens) / (ppv + sens)
-
-    # combine all reset & update ops
-    metric_update_ops = tf.group(mean_loss_update_op, acc_update_op, ppv_update_op, sens_update_op)
-    metric_reset_ops = tf.group(mean_loss_reset_op, acc_reset_op, ppv_reset_op, sens_reset_op)
-
-  # tensorboard summaries
-  # TODO: extract this into a function
-  # NOTE: tensorflow is annoying when it comes to name scopes, so sometimes the name needs to be
-  # hardcoded as a prefix instead of a proper name scope if that name was used as a name scope
-  # earlier. otherwise, a numeric suffix will be appended to the name.
-  # general minibatch summaries
-  with tf.name_scope("summary"):
-    actual_batch_size = tf.shape(images)[0]
-    percent_pos = tf.reduce_mean(labels)  # positive labels are 1
-    pos_mask = tf.cast(labels, tf.bool)
-    neg_mask = tf.logical_not(pos_mask)
-    mitosis_images = tf.boolean_mask(images, pos_mask)
-    normal_images = tf.boolean_mask(images, neg_mask)
-    mitosis_filenames = tf.boolean_mask(filenames, pos_mask)
-    normal_filenames = tf.boolean_mask(filenames, neg_mask)
-    num_preds = tf.shape(preds)[0]
 
   with tf.name_scope("images"):
     tf.summary.image("mitosis", unnormalize(mitosis_images, model_name), 1,
