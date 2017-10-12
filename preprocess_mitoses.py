@@ -407,7 +407,7 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
       in the training set.
     p_val: A decimal probability of sampling each normal patch
       in the validation set.
-    model: Optional Keras model to use for false-positive oversampling.
+    model: Optional Keras Model to use for false-positive oversampling.
     model_name: String indicating the model being used, which is used
       for determining the correct normalization.  TODO: replace this
     pred_threshold: Decimal threshold over which the patch is predicted as a

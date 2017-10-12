@@ -767,9 +767,9 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
         try:
           if log_interval > 0 and global_step % log_interval == 0:
             # train, update metrics, & log stuff
-            _, _, loss_val, mean_loss_val, f1_val, summary_str = sess.run([train_op,
-                metric_update_ops, loss, mean_loss, f1, minibatch_summaries],
-                feed_dict={K.learning_phase(): 1})
+            _, _, loss_val, summary_str = sess.run([train_op, metric_update_ops, loss,
+                minibatch_summaries], feed_dict={K.learning_phase(): 1})
+            mean_loss_val, f1_val = sess.run([mean_loss, f1])
             train_writer.add_summary(summary_str, global_step)
             print("train", global_epoch, global_step, loss_val, mean_loss_val, f1_val)
           else:
@@ -779,9 +779,10 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
         except tf.errors.OutOfRangeError:
           break
       # log average training metrics for epoch & reset
-      mean_loss_val, f1_val, summary_str = sess.run([mean_loss, f1, epoch_summaries])
-      print("---epoch {}, train avg loss: {}, train f1: {}".format(global_epoch, mean_loss_val,
-          f1_val))
+      op_values = sess.run([f1, ppv, sens, acc, mean_loss, epoch_summaries])
+      f1_val, ppv_val, sens_val, acc_val, mean_loss_val, summary_str = op_values
+      print(f"---epoch {global_epoch}, train f1: {f1_val}, train ppv: {ppv_val}, train sens: "\
+            f"{sens_val}, train acc: {acc_val}, train avg loss: {mean_loss_val}")
       train_writer.add_summary(summary_str, global_epoch)
       sess.run(metric_reset_ops)
 
@@ -792,8 +793,9 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
         try:
           # evaluate & update metrics
           if log_interval > 0 and vi % log_interval == 0:
-            _, loss_val, mean_loss_val, f1_val, summary_str = sess.run([metric_update_ops, loss,
-                mean_loss, f1, minibatch_val_summaries], feed_dict={K.learning_phase(): 0})
+            _, loss_val, summary_str = sess.run([metric_update_ops, loss, minibatch_val_summaries],
+                feed_dict={K.learning_phase(): 0})
+            mean_loss_val, f1_val = sess.run([mean_loss, f1])
             print("val", global_epoch, vi, loss_val, mean_loss_val, f1_val)
             val_writer.add_summary(summary_str, vi)
           else:
@@ -802,15 +804,12 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
         except tf.errors.OutOfRangeError:
           break
       # log average validation metrics for epoch & reset
-      mean_loss_val, f1_val, summary_str = sess.run([mean_loss, f1, epoch_summaries])
-      print("---epoch {}, val avg loss: {}, val f1: {}".format(global_epoch, mean_loss_val, f1_val))
+      op_values = sess.run([f1, ppv, sens, acc, mean_loss, epoch_summaries])
+      f1_val, ppv_val, sens_val, acc_val, mean_loss_val, summary_str = op_values
+      print(f"---epoch {global_epoch}, val f1: {f1_val}, val ppv: {ppv_val}, val sens: {sens_val},"\
+            f" val acc: {acc_val}, val avg loss: {mean_loss_val}")
       val_writer.add_summary(summary_str, global_epoch)
       sess.run(metric_reset_ops)
-
-      val_writer.flush()
-      #train_writer.flush()
-
-      global_epoch += 1
 
       # save model
       if checkpoint:
@@ -821,6 +820,12 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
         with open(global_step_epoch_filename, "wb") as f:
           pickle.dump((global_step, global_epoch), f)  # step & epoch
         print("Saved model file to {}".format(keras_filename))
+
+      val_writer.flush()
+      #train_writer.flush()
+
+      global_epoch += 1
+
 
 
 def main(args=None):
