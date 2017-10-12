@@ -596,7 +596,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     images, labels, filenames = iterator.get_next()
     input_shape = (patch_size, patch_size, 3)
 
-    if marginalize:
+    if marginalization:
       labels = marginalize(labels)  # will marginalize at test time
 
   # models
@@ -615,9 +615,10 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
 
   # loss
   with tf.name_scope("loss"):
-    data_loss = compute_data_loss(labels, logits)
-    reg_loss = compute_l2_reg_loss(model, include_frozen=True)  # including all weights
-    loss = data_loss + l2*reg_loss
+    with tf.control_dependencies([tf.assert_equal(tf.shape(labels)[0], tf.shape(logits)[0])]):
+      data_loss = compute_data_loss(labels, logits)
+      reg_loss = compute_l2_reg_loss(model, include_frozen=True)  # including all weights
+      loss = data_loss + l2*reg_loss
 
   # optim
   with tf.name_scope("optim"):
