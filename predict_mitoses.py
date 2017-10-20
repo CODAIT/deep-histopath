@@ -8,16 +8,18 @@ from pyspark.sql import SparkSession
 from breastcancer.inference import predict_mitoses, save_array_2_image
 from preprocess_mitoses import create_mask
 
-if __name__ == "__main__":
+def main(args=None):
   # parse args
   parser = argparse.ArgumentParser()
   parser.add_argument("--appName", default="Breast Cancer -- Predict", help="application name")
   parser.add_argument("--slide_path", default=os.path.join("data", "training_image_data"),
                       help="path to the mitosis data for prediction")
-  parser.add_argument("--model_path", default=os.path.join("model", "0.95114_acc_0.58515_loss_530_epoch_model.hdf5"),
+  parser.add_argument("--model_path", default=os.path.join("model",
+                                                           "0.95114_acc_0.58515_loss_530_epoch_model.hdf5"),
                       help="path to the model file")
   parser.add_argument("--model_name", default="vgg", help="input model type, e.g. vgg, resnet")
-  parser.add_argument("--file_suffix", default=".svs", help="file suffix for the input data set, e.g. *.svs")
+  parser.add_argument("--file_suffix", default=".svs",
+                      help="file suffix for the input data set, e.g. *.svs")
   parser.add_argument("--node_number", type=int, default=2,
                       help="number of available computing node in the spark cluster")
   parser.add_argument("--gpu_per_node", type=int, default=4,
@@ -27,18 +29,21 @@ if __name__ == "__main__":
   parser.add_argument("--ROI_size", type=int, default=6000, help="size of ROI")
   parser.add_argument("--ROI_overlap", type=int, default=0, help="overlap between ROIs")
   parser.add_argument("--ROI_channel", type=int, default=3, help="number of ROI channel")
-  parser.add_argument("--skipROI", default=False, dest='skipROI', action='store_true', help="skip the ROI layer")
+  parser.add_argument("--skipROI", default=False, dest='skipROI', action='store_true',
+                      help="skip the ROI layer")
   parser.add_argument("--tile_size", type=int, default=64, help="size of tile")
   parser.add_argument("--tile_overlap", type=int, default=0, help="overlap between tiles")
   parser.add_argument("--tile_channel", type=int, default=3, help="channel of tile")
   parser.add_argument("--mitosis_threshold", type=float, default=0.5,
                       help="the threshold for the identification of mitosis")
-  parser.add_argument("--batch_size", type=int, default=128, help="batch size for the mitosis prediction")
+  parser.add_argument("--batch_size", type=int, default=128,
+                      help="batch size for the mitosis prediction")
   parser.add_argument("--onGPU", dest='isGPU', action='store_true',
                       help="run the script on GPU")
   parser.add_argument("--onCPU", dest='isGPU', action='store_false', help="run the script on CPU")
   parser.set_defaults(isGPU=False)
-  parser.add_argument("--save_mitosis_locations", default=False, dest="save_mitosis_locations", action='store_true',
+  parser.add_argument("--save_mitosis_locations", default=False, dest="save_mitosis_locations",
+                      action='store_true',
                       help="save the locations of the detected mitoses to csv")
   parser.add_argument("--save_mask", default=False, dest="save_mask", action='store_true',
                       help="save the locations of the detected mitoses as a mask image ")
@@ -53,8 +58,8 @@ if __name__ == "__main__":
 
   # Create new SparkSession
   spark = (SparkSession.builder
-                       .appName(args.appName)
-                       .getOrCreate())
+           .appName(args.appName)
+           .getOrCreate())
   sparkContext = spark.sparkContext
 
   # Ship a fresh copy of the `breastcancer` package to the Spark workers.
@@ -68,12 +73,20 @@ if __name__ == "__main__":
   sparkContext.addPyFile("train_mitoses.py")
   sparkContext.addPyFile("preprocess_mitoses.py")
 
-
-  predict_result_rdd = predict_mitoses(sparkContext=sparkContext, model_path=args.model_path, model_name = args.model_name,
-                                       input_dir=args.slide_path, file_suffix=args.file_suffix, partition_num=args.partition_num,
-                                       ROI_size=args.ROI_size, ROI_overlap=args.ROI_overlap, ROI_channel=args.ROI_channel, skipROI=args.skipROI,
-                                       tile_size=args.tile_size, tile_overlap=args.tile_overlap, tile_channel=args.tile_channel,
-                                       threshold=args.mitosis_threshold, isGPU=args.isGPU, batch_size=args.batch_size,
-                                       save_mitosis_locations=args.save_mitosis_locations, save_mask=args.save_mask, isDebug=args.isDebug)
+  predict_result_rdd = predict_mitoses(sparkContext=sparkContext, model_path=args.model_path,
+                                       model_name=args.model_name,
+                                       input_dir=args.slide_path, file_suffix=args.file_suffix,
+                                       partition_num=args.partition_num,
+                                       ROI_size=args.ROI_size, ROI_overlap=args.ROI_overlap,
+                                       ROI_channel=args.ROI_channel, skipROI=args.skipROI,
+                                       tile_size=args.tile_size, tile_overlap=args.tile_overlap,
+                                       tile_channel=args.tile_channel,
+                                       threshold=args.mitosis_threshold, isGPU=args.isGPU,
+                                       batch_size=args.batch_size,
+                                       save_mitosis_locations=args.save_mitosis_locations,
+                                       save_mask=args.save_mask, isDebug=args.isDebug)
   print(predict_result_rdd.collect())
 
+
+if __name__ == "__main__":
+  main()
