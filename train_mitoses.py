@@ -249,7 +249,7 @@ def create_dataset(path, model_name, patch_size, batch_size, shuffle, augmentati
     A Dataset object.
   """
   # read & process images
-  dataset = tf.contrib.data.Dataset.list_files(os.path.join(path, "*", "*.jpg"))
+  dataset = tf.data.Dataset.list_files(os.path.join(path, "*", "*.jpg"))
 
   if shuffle:
     dataset = dataset.shuffle(500000)
@@ -602,7 +602,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     val_dataset = create_dataset(val_path, model_name, patch_size, val_batch_size, False, False,
         marginalization, threads, prefetch_batches, seed)
 
-    iterator = tf.contrib.data.Iterator.from_structure(train_dataset.output_types,
+    iterator = tf.data.Iterator.from_structure(train_dataset.output_types,
                                                        train_dataset.output_shapes)
     train_init_op = iterator.make_initializer(train_dataset)
     val_init_op = iterator.make_initializer(val_dataset)
@@ -1442,7 +1442,7 @@ def test_num_parallel_calls():
     images = np.random.rand(100, 64, 64, 3).astype(np.float32)
 
     def get_data():
-      dataset = tf.contrib.data.Dataset.from_tensor_slices(images)  # some initial dataset
+      dataset = tf.data.Dataset.from_tensor_slices(images)  # some initial dataset
       #dataset = dataset.map(lambda x: x * 2, num_parallel_calls=threads)  # this works fine always
       #dataset = dataset.map(lambda x: x * tf.random_normal([64, 64, 3], seed=42),
       #    num_parallel_calls=threads)

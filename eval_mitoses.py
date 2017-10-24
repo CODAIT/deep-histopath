@@ -46,7 +46,7 @@ def evaluate(patches_path, patch_size, batch_size, model, model_name, prob_thres
     dataset = create_dataset(patches_path, model_name, patch_size, batch_size, False, False,
         marginalization, threads, prefetch_batches)
 
-    iterator = tf.contrib.data.Iterator.from_structure(dataset.output_types, dataset.output_shapes)
+    iterator = tf.data.Iterator.from_structure(dataset.output_types, dataset.output_shapes)
     data_init_op = iterator.make_initializer(dataset)
     images, labels, filenames = iterator.get_next()
     input_shape = (patch_size, patch_size, 3)
