@@ -145,6 +145,12 @@ def augment(image, seed=None):
   # NOTE: these values currently come from the Google pathology paper:
   # Liu Y, Gadepalli K, Norouzi M, Dahl GE, Kohlberger T, Boyko A, et al.
   # Detecting Cancer Metastases on Gigapixel Pathology Images. arXiv.org. 2017.
+  # NOTE: if the seed is None, these ops will be seeded with a completely random seed, rather than
+  # a deterministic one based on the graph seed. It is possible that this only happens within the
+  # map functions of the Dataset API.  For now, we will pass in a seed from the user.
+  # NOTE: Additionally, if the Dataset.map() function that calls this function is using
+  # `num_parallel_calls` > 1, the results will be non-reproducible.
+  # TODO: https://github.com/tensorflow/tensorflow/issues/13932
   image = tf.image.random_flip_up_down(image, seed=seed)
   image = tf.image.random_flip_left_right(image, seed=seed)
   image = tf.image.random_brightness(image, 64/255, seed=seed)
@@ -214,7 +220,7 @@ def marginalize(x):
 
 
 def create_dataset(path, model_name, patch_size, batch_size, shuffle, augmentation, marginalization,
-    threads, prefetch_batches):
+    threads, prefetch_batches, seed):
   """Create a dataset.
 
   Args:
@@ -237,6 +243,7 @@ def create_dataset(path, model_name, patch_size, batch_size, shuffle, augmentati
       debugging case of no augmentation.
     threads: Integer number of threads for dataset buffering.
     prefetch_batches: Integer number of batches to prefetch.
+    seed: Integer random seed.
 
   Returns:
     A Dataset object.
@@ -252,7 +259,7 @@ def create_dataset(path, model_name, patch_size, batch_size, shuffle, augmentati
 
   # augment (typically at training time)
   if augmentation:
-    dataset = dataset.map(lambda image, label, filename: (augment(image), label, filename),
+    dataset = dataset.map(lambda image, label, filename: (augment(image, seed), label, filename),
         num_parallel_calls=threads)
 
   # marginalize (typically at eval time)
@@ -529,7 +536,8 @@ def initialize_variables(sess):
 
 def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_size, val_batch_size,
     clf_epochs, finetune_epochs, clf_lr, finetune_lr, finetune_momentum, finetune_layers, l2,
-    augmentation, marginalization, threads, prefetch_batches, log_interval, checkpoint, resume):
+    augmentation, marginalization, threads, prefetch_batches, log_interval, checkpoint, resume,
+    seed):
   """Train a model.
 
   Args:
@@ -573,6 +581,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
       after each epoch.
     resume: Boolean flag for whether or not to resume training from a
       checkpoint.
+    seed: Integer random seed.
   """
   # TODO: break this out into:
   #   * data gen func
@@ -582,12 +591,16 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
   #   * logging func
   #   * train func
 
+  # set random seed
+  np.random.seed(seed)
+  tf.set_random_seed(seed)
+
   # data
   with tf.name_scope("data"):
     train_dataset = create_dataset(train_path, model_name, patch_size, train_batch_size, True,
-        augmentation, False, threads, prefetch_batches)
+        augmentation, False, threads, prefetch_batches, seed)
     val_dataset = create_dataset(val_path, model_name, patch_size, val_batch_size, False, False,
-        marginalization, threads, prefetch_batches)
+        marginalization, threads, prefetch_batches, seed)
 
     iterator = tf.contrib.data.Iterator.from_structure(train_dataset.output_types,
                                                        train_dataset.output_shapes)
@@ -619,6 +632,11 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
       data_loss = compute_data_loss(labels, logits)
       reg_loss = compute_l2_reg_loss(model, include_frozen=True)  # including all weights
       loss = data_loss + l2*reg_loss
+      # TODO: enable this and test it
+      # use l2 reg during training, but not during validation.  Otherwise, more fine-tuning will
+      # lead to an apparent lower validation loss, even though it may just be due to more layers
+      # that can be adjusted in order to lower the regularization portion of the loss.
+      #loss = tf.cond(K.learning_phase(), lambda: data_loss + l2*reg_loss, lambda: data_loss)
 
   # optim
   with tf.name_scope("optim"):
@@ -882,7 +900,8 @@ def main(args=None):
            "the validation batch_size must be divisible by 4, or equal to 1 for no augmentation "\
            "(default: %(default)s)")
   parser.add_argument("--threads", type=int, default=5,
-      help="number of threads for dataset buffering (default: %(default)s)")
+      help="number of threads for dataset parallel processing; note: this will cause "\
+           "non-reproducibility (default: %(default)s)")
   parser.add_argument("--prefetch_batches", type=int, default=100,
       help="number of batches to prefetch (default: %(default)s)")
   parser.add_argument("--log_interval", type=int, default=100,
@@ -895,6 +914,7 @@ def main(args=None):
   parser.set_defaults(checkpoint=True)
   parser.add_argument("--resume", default=False, action="store_true",
       help="resume training from a checkpoint (default: %(default)s)")
+  parser.add_argument("--seed", type=int, help="random seed (default: %(default)s)")
 
   args = parser.parse_args(args)
 
@@ -920,6 +940,10 @@ def main(args=None):
     os.makedirs(os.path.join(exp_path, "checkpoints"))
   print("experiment directory: {}".format(exp_path))
 
+  # create a random seed if needed
+  if args.seed is None:
+    args.seed = np.random.randint(1e9)
+
   # save args to a file in the experiment folder, appending if it exists
   with open(os.path.join(exp_path, 'args.txt'), 'a') as f:
     f.write(str(args) + "\n")
@@ -928,10 +952,14 @@ def main(args=None):
   shutil.copy2(os.path.realpath(__file__), exp_path)
 
   # train!
-  train(train_path, val_path, exp_path, args.model, args.patch_size, args.train_batch_size,
-      args.val_batch_size, args.clf_epochs, args.finetune_epochs, args.clf_lr, args.finetune_lr,
-      args.finetune_momentum, args.finetune_layers, args.l2, args.augment, args.marginalize,
-      args.threads, args.prefetch_batches, args.log_interval, args.checkpoint, args.resume)
+  train(train_path=train_path, val_path=val_path, exp_path=exp_path, model_name=args.model,
+      patch_size=args.patch_size, train_batch_size=args.train_batch_size,
+      val_batch_size=args.val_batch_size, clf_epochs=args.clf_epochs,
+      finetune_epochs=args.finetune_epochs, clf_lr=args.clf_lr, finetune_lr=args.finetune_lr,
+      finetune_momentum=args.finetune_momentum, finetune_layers=args.finetune_layers, l2=args.l2,
+      augmentation=args.augment, marginalization=args.marginalize, threads=args.threads,
+      prefetch_batches=args.prefetch_batches, log_interval=args.log_interval,
+      checkpoint=args.checkpoint, resume=args.resume, seed=args.seed)
 
 
 if __name__ == "__main__":
@@ -1376,4 +1404,74 @@ def test_initialize_variables():
   for v in tf.global_variables():
     assert hasattr(v, '_keras_initialized') and v._keras_initialized  # check for initialization
     assert sess.run(tf.is_variable_initialized(v))  # check for initialization
+
+
+def test_random_seed():
+  reset()
+  input_shape = (64,64,3)
+  seed = 42
+
+  # seed before Keras import
+  np.random.seed(seed)
+  from keras.layers import Dense
+  layer1 = Dense(32)
+  layer1.build(input_shape)
+  w1 = layer1.get_weights()[0]
+
+  reset()
+  np.random.seed(23)  # different random seed just to be sure...
+
+  # seed after Keras import
+  from keras.layers import Dense
+  np.random.seed(seed)
+  layer2 = Dense(32)
+  layer2.build(input_shape)
+  w2 = layer2.get_weights()[0]
+
+  # compare
+  assert np.allclose(w1, w2)
+
+
+def test_num_parallel_calls():
+  import pytest
+  reset()
+
+  def test(threads):
+    np.random.seed(42)
+    tf.set_random_seed(42)
+    images = np.random.rand(100, 64, 64, 3).astype(np.float32)
+
+    def get_data():
+      dataset = tf.contrib.data.Dataset.from_tensor_slices(images)  # some initial dataset
+      #dataset = dataset.map(lambda x: x * 2, num_parallel_calls=threads)  # this works fine always
+      #dataset = dataset.map(lambda x: x * tf.random_normal([64, 64, 3], seed=42),
+      #    num_parallel_calls=threads)
+      dataset = dataset.map(lambda image: tf.image.random_hue(image, 0.04, seed=42),
+          num_parallel_calls=threads)
+      dataset = dataset.batch(32)
+      x = dataset.make_one_shot_iterator().get_next()
+      return x
+
+    # execution 1
+    x = get_data()
+    with tf.Session() as sess:
+      x_batch1 = sess.run(x)
+
+    # clear out everything
+    tf.reset_default_graph()
+
+    # execution 2
+    x = get_data()
+    with tf.Session() as sess:
+      x_batch2 = sess.run(x)
+
+    # results should be equivalent
+    assert np.allclose(x_batch1, x_batch2)
+
+  test(1)  # works with 1 thread!
+
+  # TODO: eventually, this should not throw an exception:
+  # https://github.com/tensorflow/tensorflow/issues/13932
+  with pytest.raises(AssertionError):
+    test(15)  # fails with >1 threads!
 
