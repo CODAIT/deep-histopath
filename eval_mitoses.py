@@ -10,7 +10,7 @@ import tensorflow as tf
 from train_mitoses import create_dataset, compute_data_loss, compute_metrics, marginalize
 
 
-def evaluate(patches_path, patch_size, batch_size, model, model_name, pred_threshold,
+def evaluate(patches_path, patch_size, batch_size, model, model_name, prob_threshold,
     marginalization, threads, prefetch_batches, log_interval):
   """Evaluate a model.
 
@@ -22,8 +22,8 @@ def evaluate(patches_path, patch_size, batch_size, model, model_name, pred_thres
     batch_size: Integer batch size.
     model: A Keras Model object.
     model_name: String indicating the model to use.
-    pred_threshold: Decimal threshold over which the patch is predicted as a
-      positive case.  TODO: actually use this
+    prob_threshold: Decimal threshold over which the patch is predicted as a
+      positive case.
     marginalization: Boolean for whether or not to use noise
       marginalization when evaluating the validation set.  If True, then
       each image in the validation set will be expanded to a batch of
@@ -64,8 +64,8 @@ def evaluate(patches_path, patch_size, batch_size, model, model_name, pred_thres
     else:
       logits = model(images)
     probs = tf.nn.sigmoid(logits, name="probs")
-    # TODO: use pred_threshold
-    preds = tf.round(probs, name="preds")  # implicit threshold at 0.5
+    #preds = tf.round(probs, name="preds")  # implicit threshold at 0.5
+    preds = probs > prob_threshold
 
   # loss
   with tf.name_scope("loss"):
@@ -125,8 +125,9 @@ def main(args=None):
       help="name of the model being used in ['logreg', 'vgg', 'vgg19', 'resnet'], which is used "\
            "for determining the correct normalization")
   parser.add_argument("--model_path",
-      help="path to a Keras model to use for false-positive oversampling")
-  parser.add_argument("--pred_threshold", type=float, default=0,
+      help="path to a Keras model to use for false-positive oversampling; note: this model should "\
+           "produce logit values, rather than probability values")
+  parser.add_argument("--prob_threshold", type=float, default=0.5,
       help="threshold over which the patch is predicted as a positive case (default: %(default)s)")
   parser.add_argument("--marginalize", default=False, action="store_true",
       help="use noise marginalization when evaluating the validation set. if this is set, then "\
@@ -146,7 +147,7 @@ def main(args=None):
 
   # eval!
   evaluate(args.patches_path, args.patch_size, args.batch_size, model, args.model_name,
-      args.pred_threshold, args.marginalize, args.threads, args.prefetch_batches,
+      args.prob_threshold, args.marginalize, args.threads, args.prefetch_batches,
       args.log_interval)
 
 
