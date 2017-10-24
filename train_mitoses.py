@@ -146,8 +146,10 @@ def augment(image, seed=None):
   # Liu Y, Gadepalli K, Norouzi M, Dahl GE, Kohlberger T, Boyko A, et al.
   # Detecting Cancer Metastases on Gigapixel Pathology Images. arXiv.org. 2017.
   # NOTE: if the seed is None, these ops will be seeded with a completely random seed, rather than
-  # a deterministic one based on the graph seed. It is possible that this only happens within the
-  # map functions of the Dataset API.  For now, we will pass in a seed from the user.
+  # a deterministic one based on the graph seed. This appears to only happen within the map
+  # functions of the Dataset API, based on the `test_num_parallel_calls` and
+  # `test_image_random_op_seeds` tests.  For now, we will pass in a seed from the user and use it
+  # at the op level.
   # NOTE: Additionally, if the Dataset.map() function that calls this function is using
   # `num_parallel_calls` > 1, the results will be non-reproducible.
   # TODO: https://github.com/tensorflow/tensorflow/issues/13932
@@ -1474,4 +1476,24 @@ def test_num_parallel_calls():
   # https://github.com/tensorflow/tensorflow/issues/13932
   with pytest.raises(AssertionError):
     test(15)  # fails with >1 threads!
+
+
+def test_image_random_op_seeds():
+  # this test shows that there is an issue with the `tf.data.Dataset.map` function in which
+  # graph-level seeds appear to not be propagated within the mapped functions
+  reset()
+
+  np.random.seed(42)
+  image = np.random.rand(64, 64, 3).astype(np.float32)
+
+  tf.set_random_seed(42)
+  image_aug = tf.image.random_hue(image, 0.04)
+
+  with tf.Session() as sess:
+    image_aug_value1 = sess.run(image_aug)
+
+  with tf.Session() as sess:
+    image_aug_value2 = sess.run(image_aug)
+
+  assert np.allclose(image_aug_value1, image_aug_value2)
 
