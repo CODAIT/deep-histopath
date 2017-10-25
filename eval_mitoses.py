@@ -115,18 +115,17 @@ def main(args=None):
   """
   # parse args
   parser = argparse.ArgumentParser()
-  parser.add_argument("--patches_path",
+  parser.add_argument("--model_name", required=True, choices=['logreg', 'vgg', 'vgg19', 'resnet'],
+      help="name of the model, which is used for determining the correct normalization")
+  parser.add_argument("--model_path", required=True,
+      help="path to a Keras model to use for false-positive oversampling; note: this model should "\
+           "produce logit values, rather than probability values")
+  parser.add_argument("--patches_path", required=True,
       help="path to the generated image patches containing `mitosis` & `normal` folders")
   parser.add_argument("--patch_size", type=int, default=64,
       help="integer length to which the square patches will be resized (default: %(default)s)")
   parser.add_argument("--batch_size", type=int, default=32,
       help="batch size (default: %(default)s)")
-  parser.add_argument("--model_name",
-      help="name of the model being used in ['logreg', 'vgg', 'vgg19', 'resnet'], which is used "\
-           "for determining the correct normalization")
-  parser.add_argument("--model_path",
-      help="path to a Keras model to use for false-positive oversampling; note: this model should "\
-           "produce logit values, rather than probability values")
   parser.add_argument("--prob_threshold", type=float, default=0.5,
       help="threshold over which the patch is predicted as a positive case (default: %(default)s)")
   parser.add_argument("--marginalize", default=False, action="store_true",
