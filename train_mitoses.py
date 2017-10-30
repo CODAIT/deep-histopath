@@ -96,9 +96,10 @@ def normalize(image, model_name):
   """
   # NOTE: don't use in-place updates to avoid side-effects
   if model_name in ("vgg", "vgg19", "resnet"):
+    means = np.array([103.939, 116.779, 123.68]).astype(np.float32)
     image = image[..., ::-1]  # rbg -> bgr
     image = image * 255  # float32 in [0, 255]
-    image = image - [103.939, 116.779, 123.68]  # mean centering using imagenet means
+    image = image - means  # mean centering using imagenet means
   else:
     # normalize to [-1, 1]
     #image = image / 255
@@ -123,7 +124,8 @@ def unnormalize(image, model_name):
   """
   # NOTE: don't use in-place updates to avoid side-effects
   if model_name in ("vgg", "vgg19", "resnet"):
-    image = image + [103.939, 116.779, 123.68]  # mean centering using imagenet means
+    means = np.array([103.939, 116.779, 123.68]).astype(np.float32)
+    image = image + means  # mean centering using imagenet means
     image = image / 255  # float32 in [0, 1]
     image = image[..., ::-1]  # bgr -> rgb
   else:
@@ -1028,109 +1030,122 @@ def test_normalize_unnormalize():
 
   # imagenet preprocessing
   model_name = "vgg"
-  means = np.array([103.939, 116.779, 123.68])
-  x_means_np = np.mean(x_np, axis=(0,1))
-  x_means_np = x_means_np[..., ::-1] * 255 - means
-  x_batch_means_np = np.mean(x_batch_np, axis=(1,2))
-  x_batch_means_np = x_batch_means_np[..., ::-1] * 255 - means
+  means = np.array([103.939, 116.779, 123.68]).astype(np.float32)
+  x_norm_correct_np = x_np[..., ::-1] * 255 - means
+  x_batch_norm_correct_np = x_batch_np[..., ::-1] * 255 - means
+
+  assert x_np.dtype == np.float32
+  assert x_np.dtype == x_batch_np.dtype == x_norm_correct_np.dtype == x_batch_norm_correct_np.dtype
 
   # single example
-  def test(x_norm, x_orig):
-    # close over x_np & x_means_np
-    assert np.allclose(x_np, x_orig, atol=1e-7)
-    assert ~(np.allclose(x_np, x_norm))
+  def test(x_norm, x_unnorm):
+    """Test normalized and unnormalized versions of x."""
+    # NOTE: closes over x_np & x_norm_correct_np
+    assert x_norm.dtype == x_norm_correct_np.dtype
+    assert x_unnorm.dtype == x_np.dtype
+    assert np.allclose(x_norm, x_norm_correct_np)
+    assert ~(np.allclose(x_norm, x_np))
     assert np.all(np.max(x_norm, axis=(0,1)) > 1)
     assert np.all(np.max(x_norm, axis=(0,1)) < 255 - means)
     assert np.all(np.min(x_norm, axis=(0,1)) < 0)
     assert np.all(np.min(x_norm, axis=(0,1)) > 0 - means)
-    assert np.allclose(np.mean(x_norm, axis=(0,1)), x_means_np, rtol=1e-4)
+    assert np.allclose(x_unnorm, x_np, rtol=5.e-5)  #, atol=1e-7)
 
   # batch of examples
-  def test_batch(x_norm_batch, x_orig_batch):
-    # close over x_np & x_means_np
-    assert np.allclose(x_batch_np, x_orig_batch, atol=1e-7)
-    assert ~(np.allclose(x_batch_np, x_norm_batch))
-    assert np.all(np.max(x_norm_batch, axis=(0,1,2)) > 1)
-    assert np.all(np.max(x_norm_batch, axis=(0,1,2)) < 255 - means)
-    assert np.all(np.min(x_norm_batch, axis=(0,1,2)) < 0)
-    assert np.all(np.min(x_norm_batch, axis=(0,1,2)) > 0 - means)
-    assert np.allclose(np.mean(x_norm_batch, axis=(1,2)), x_batch_means_np, rtol=1e-4)
+  def test_batch(x_batch_norm, x_batch_unnorm):
+    """Test normalized and unnormalized versions of x_batch."""
+    # NOTE: closes over x_batch_np & x_batch_norm_correct_np
+    assert x_batch_norm.dtype == x_batch_norm_correct_np.dtype
+    assert x_batch_unnorm.dtype == x_batch_np.dtype
+    assert np.allclose(x_batch_norm, x_batch_norm_correct_np)
+    assert ~(np.allclose(x_batch_norm, x_batch_np))
+    assert np.all(np.max(x_batch_norm, axis=(0,1,2)) > 1)
+    assert np.all(np.max(x_batch_norm, axis=(0,1,2)) < 255 - means)
+    assert np.all(np.min(x_batch_norm, axis=(0,1,2)) < 0)
+    assert np.all(np.min(x_batch_norm, axis=(0,1,2)) > 0 - means)
+    assert np.allclose(x_batch_unnorm, x_batch_unnorm_np)  #, atol=1e-7)
 
   ## numpy
   x_norm_np = normalize(x_np, model_name)
-  x_orig_np = unnormalize(x_norm_np, model_name)
-  test(x_norm_np, x_orig_np)
+  x_unnorm_np = unnormalize(x_norm_np, model_name)
+  test(x_norm_np, x_unnorm_np)
 
-  x_norm_batch_np = normalize(x_batch_np, model_name)
-  x_orig_batch_np = unnormalize(x_norm_batch_np, model_name)
-  test_batch(x_norm_batch_np, x_orig_batch_np)
+  x_batch_norm_np = normalize(x_batch_np, model_name)
+  x_batch_unnorm_np = unnormalize(x_batch_norm_np, model_name)
+  test_batch(x_batch_norm_np, x_batch_unnorm_np)
 
   ## tensorflow
   x = tf.placeholder(tf.float32, [*input_shape])
   x_norm = normalize(x, model_name)
-  x_orig = unnormalize(x_norm, model_name)
-  x_norm_np, x_orig_np = sess.run([x_norm, x_orig], feed_dict={x: x_np})
-  test(x_norm_np, x_orig_np)
+  x_unnorm = unnormalize(x_norm, model_name)
+  x_norm_np, x_unnorm_np = sess.run([x_norm, x_unnorm], feed_dict={x: x_np})
+  test(x_norm_np, x_unnorm_np)
 
   x_batch = tf.placeholder(tf.float32, [None, *input_shape])
-  x_norm_batch = normalize(x_batch, model_name)
-  x_orig_batch = unnormalize(x_norm_batch, model_name)
-  x_norm_batch_np, x_orig_batch_np = sess.run([x_norm_batch, x_orig_batch],
+  x_batch_norm = normalize(x_batch, model_name)
+  x_batch_unnorm = unnormalize(x_batch_norm, model_name)
+  x_batch_norm_np, x_batch_unnorm_np = sess.run([x_batch_norm, x_batch_unnorm],
       feed_dict={x_batch: x_batch_np})
-  test_batch(x_norm_batch_np, x_orig_batch_np)
+  test_batch(x_batch_norm_np, x_batch_unnorm_np)
 
 
   # image standardization preprocessing
   reset()
   sess = K.get_session()
   model_name = "not_vgg"
-  x_means_np = np.mean(x_np, axis=(0,1)) * 2 - 1
-  x_batch_means_np = np.mean(x_batch_np, axis=(1,2)) * 2 - 1
+  x_norm_correct_np = x_np * 2 - 1
+  x_batch_norm_correct_np = x_batch_np * 2 - 1
 
   # single example
-  def test(x_norm, x_orig):
-    # close over x_np & x_means_np
-    assert np.allclose(x_np, x_orig, atol=1e-7)
-    assert ~(np.allclose(x_np, x_norm))
+  def test(x_norm, x_unnorm):
+    """Test normalized and unnormalized versions of x."""
+    # NOTE: closes over x_np & x_norm_correct_np
+    assert x_norm.dtype == x_norm_correct_np.dtype
+    assert x_unnorm.dtype == x_np.dtype
+    assert np.allclose(x_norm, x_norm_correct_np)
+    assert ~(np.allclose(x_norm, x_np))
     assert np.all(np.max(x_norm, axis=(0,1)) <= 1)
     assert np.all(np.max(x_norm, axis=(0,1)) > 0)
     assert np.all(np.min(x_norm, axis=(0,1)) >= -1)
     assert np.all(np.min(x_norm, axis=(0,1)) < 0)
-    assert np.allclose(np.mean(x_norm, axis=(0,1)), x_means_np, atol=1e-6, rtol=1e-3)
+    assert np.allclose(x_unnorm, x_np, rtol=5.e-5)  #, atol=1e-7)
 
   # batch of examples
-  def test_batch(x_norm_batch, x_orig_batch):
-    # close over x_np & x_means_np
-    assert np.allclose(x_batch_np, x_orig_batch, atol=1e-7)
-    assert ~(np.allclose(x_batch_np, x_norm_batch))
-    assert np.all(np.max(x_norm_batch, axis=(0,1,2)) <= 1)
-    assert np.all(np.max(x_norm_batch, axis=(0,1,2)) > 0)
-    assert np.all(np.min(x_norm_batch, axis=(0,1,2)) >= -1)
-    assert np.all(np.min(x_norm_batch, axis=(0,1,2)) < 0)
-    assert np.allclose(np.mean(x_norm_batch, axis=(1,2)), x_batch_means_np, atol=1e-6, rtol=1e-3)
+  def test_batch(x_batch_norm, x_batch_unnorm):
+    """Test normalized and unnormalized versions of x_batch."""
+    # NOTE: closes over x_batch_np & x_batch_norm_correct_np
+    assert x_batch_norm.dtype == x_batch_norm_correct_np.dtype
+    assert x_batch_unnorm.dtype == x_batch_np.dtype
+    assert np.allclose(x_batch_norm, x_batch_norm_correct_np)
+    assert ~(np.allclose(x_batch_norm, x_batch_np))
+    assert np.all(np.max(x_batch_norm, axis=(0,1,2)) <= 1)
+    assert np.all(np.max(x_batch_norm, axis=(0,1,2)) > 0)
+    assert np.all(np.min(x_batch_norm, axis=(0,1,2)) >= -1)
+    assert np.all(np.min(x_batch_norm, axis=(0,1,2)) < 0)
+    assert np.allclose(x_batch_unnorm, x_batch_unnorm_np)  #, atol=1e-7)
 
   ## numpy
   x_norm_np = normalize(x_np, model_name)
-  x_orig_np = unnormalize(x_norm_np, model_name)
-  test(x_norm_np, x_orig_np)
+  x_unnorm_np = unnormalize(x_norm_np, model_name)
+  test(x_norm_np, x_unnorm_np)
 
-  x_norm_batch_np = normalize(x_batch_np, model_name)
-  x_orig_batch_np = unnormalize(x_norm_batch_np, model_name)
-  test_batch(x_norm_batch_np, x_orig_batch_np)
+  x_batch_norm_np = normalize(x_batch_np, model_name)
+  x_batch_unnorm_np = unnormalize(x_batch_norm_np, model_name)
+  test_batch(x_batch_norm_np, x_batch_unnorm_np)
 
   ## tensorflow
   x = tf.placeholder(tf.float32, [*input_shape])
   x_norm = normalize(x, model_name)
-  x_orig = unnormalize(x_norm, model_name)
-  x_norm_np, x_orig_np = sess.run([x_norm, x_orig], feed_dict={x: x_np})
-  test(x_norm_np, x_orig_np)
+  x_unnorm = unnormalize(x_norm, model_name)
+  x_norm_np, x_unnorm_np = sess.run([x_norm, x_unnorm], feed_dict={x: x_np})
+  test(x_norm_np, x_unnorm_np)
 
   x_batch = tf.placeholder(tf.float32, [None, *input_shape])
-  x_norm_batch = normalize(x_batch, model_name)
-  x_orig_batch = unnormalize(x_norm_batch, model_name)
-  x_norm_batch_np, x_orig_batch_np = sess.run([x_norm_batch, x_orig_batch],
+  x_batch_norm = normalize(x_batch, model_name)
+  x_batch_unnorm = unnormalize(x_batch_norm, model_name)
+  x_batch_norm_np, x_batch_unnorm_np = sess.run([x_batch_norm, x_batch_unnorm],
       feed_dict={x_batch: x_batch_np})
-  test_batch(x_norm_batch_np, x_orig_batch_np)
+  test_batch(x_batch_norm_np, x_batch_unnorm_np)
 
 
 def test_create_augmented_batch():
@@ -1496,4 +1511,82 @@ def test_image_random_op_seeds():
     image_aug_value2 = sess.run(image_aug)
 
   assert np.allclose(image_aug_value1, image_aug_value2)
+
+
+def test_normalize_dtype():
+  import pytest
+  reset()
+  sess = K.get_session()
+
+  input_shape = (64,64,3)
+  model = VGG16(include_top=False, input_shape=input_shape)
+
+  # check on incorrect float type promotion within the normalize function
+
+  def normalize(image):
+    means = np.array([103.939, 116.779, 123.68]).astype(np.float32)
+    image = image[..., ::-1]  # rbg -> bgr
+    image = image * 255  # float32 in [0, 255]
+    image = image - means  # mean centering using imagenet means
+    return image
+
+  def normalize_incorrect(image):
+    image = image[..., ::-1]  # rbg -> bgr
+    image = image * 255  # float32 in [0, 255]
+    image = image - [103.939, 116.779, 123.68]  # ouch! this will yield a float64!
+    return image
+
+  x = np.random.randint(0, 255, size=(1, *input_shape), dtype=np.uint8)
+  x_div_255 = (x / 255).astype(np.float32)
+  x_div_255_incorrect = x / 255  # float64
+  x_norm1a = normalize(x_div_255)
+  x_norm1b = normalize(x_div_255_incorrect)
+  x_norm2a = normalize_incorrect(x_div_255)
+  x_norm2b = normalize_incorrect(x_div_255_incorrect)
+  # tensorflow
+  x_tf = tf.placeholder(tf.float32, [1, *input_shape])
+  x_norm_tf1 = normalize(x_tf)
+  x_norm_tf2 = normalize_incorrect(x_tf)
+  x_normtf1, x_normtf2 = sess.run([x_norm_tf1, x_norm_tf2], feed_dict={x_tf: x_div_255})
+
+  assert x_norm1a.shape == x_norm1b.shape == x_norm2a.shape == x_norm2b.shape == \
+      x_normtf1.shape == x_normtf2.shape
+  assert x_norm1a.dtype == x_normtf1.dtype == x_normtf2.dtype == np.float32  # this is what we want
+  with pytest.raises(AssertionError):
+    assert x_norm1b.dtype == np.float32  # ouch!
+  with pytest.raises(AssertionError):
+    assert x_norm2a.dtype == np.float32  # ouch!
+  with pytest.raises(AssertionError):
+    assert x_norm2b.dtype == np.float32  # ouch!
+  assert np.allclose(x_norm1a, x_norm1b)  # interestingly, these are close
+  assert np.allclose(x_norm2a, x_norm2b)  # interestingly, these are close
+  with pytest.raises(AssertionError):
+    assert np.allclose(x_norm1a, x_norm2a)  # ouch!
+  with pytest.raises(AssertionError):
+    assert np.allclose(x_norm1b, x_norm2b)  # ouch!
+  assert np.allclose(x_normtf1, x_norm1a)
+  assert np.allclose(x_normtf1, x_normtf2)  # both normalize functions are equivalent with tf
+
+
+  # now check on the predictions from a model based on these normalized tensors
+
+  pred1a = model.predict(x_norm1a, 1)
+  pred1b = model.predict(x_norm1b, 1)
+  pred2a = model.predict(x_norm2a, 1)
+  pred2b = model.predict(x_norm2b, 1)
+  predtf1 = model.predict(x_normtf1, 1)
+  predtf2 = model.predict(x_normtf2, 1)
+
+  assert pred1a.shape == pred1b.shape == pred2a.shape == pred2b.shape == predtf1.shape == \
+      predtf2.shape
+  assert pred1a.dtype == pred1b.dtype == pred2a.dtype == pred2b.dtype == predtf1.dtype == \
+      predtf2.dtype == np.float32
+  assert np.allclose(pred1a, pred1b)  # interestingly, these are close
+  assert np.allclose(pred2a, pred2b)  # interestingly, these are close
+  with pytest.raises(AssertionError):
+    assert np.allclose(pred1a, pred2a)  # ouch!
+  with pytest.raises(AssertionError):
+    assert np.allclose(pred1b, pred2b)  # ouch!
+  assert np.allclose(predtf1, pred1a)
+  assert np.allclose(predtf1, predtf2)  # equivalent results in tf
 
