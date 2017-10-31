@@ -452,7 +452,7 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
           h, w, c = im.shape
           coords_path = os.path.join(labels_path, case, "{}.csv".format(region))
           if os.path.isfile(coords_path):
-            coords = np.loadtxt(coords_path, dtype=np.int64, delimiter=',', ndmin=2)
+            coords = np.loadtxt(coords_path, dtype=np.int64, delimiter=',', ndmin=2)  #, usecols=(0,1))
           else:  # a missing file indicates no mitoses
             coords = []  # no mitoses
 
@@ -573,6 +573,10 @@ if __name__ == "__main__":
 
   if args.stride_val is None:
     args.stride_val = args.patch_size
+
+  # create a random seed if needed
+  if args.seed is None:
+    args.seed = np.random.randint(1e9)
 
   # save args to file in save folder
   if not os.path.exists(args.save_path):
