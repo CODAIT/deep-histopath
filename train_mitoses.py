@@ -155,6 +155,11 @@ def augment(image, seed=None):
   # NOTE: Additionally, if the Dataset.map() function that calls this function is using
   # `num_parallel_calls` > 1, the results will be non-reproducible.
   # TODO: https://github.com/tensorflow/tensorflow/issues/13932
+  # NOTE: ouch!  It turns out that a reinitializable iterator for a Dataset will cause any ops with
+  # random seeds, such as these, to be reset, and thus each epoch will be evaluated exactly the
+  # same.  The desired behavior would be to seed these ops once at the very beginning, so that an
+  # entire training run can be deterministic, but not with the exact same random augmentation during
+  # each epoch.  Oh TensorFlow...
   image = tf.image.random_flip_up_down(image, seed=seed)
   image = tf.image.random_flip_left_right(image, seed=seed)
   image = tf.image.random_brightness(image, 64/255, seed=seed)
@@ -224,7 +229,7 @@ def marginalize(x):
 
 
 def create_dataset(path, model_name, patch_size, batch_size, shuffle, augmentation, marginalization,
-    threads, prefetch_batches, seed):
+    threads, prefetch_batches, seed=None):
   """Create a dataset.
 
   Args:
@@ -596,15 +601,19 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
   #   * train func
 
   # set random seed
+  # NOTE: At the moment, this is faily useless because if the augmentation ops are seeded, they will
+  # be evaluated in the exact same deterministic manner on every epoch, which is not desired.
+  # Additionally, the multithreading needed to process the data will cause non-deterministic
+  # results.  The one benefit is that the classification layers will be created deterministically.
   np.random.seed(seed)
   tf.set_random_seed(seed)
 
   # data
   with tf.name_scope("data"):
     train_dataset = create_dataset(train_path, model_name, patch_size, train_batch_size, True,
-        augmentation, False, threads, prefetch_batches, seed)
+        augmentation, False, threads, prefetch_batches)  #, seed)  # seed issues to be fixed in tf
     val_dataset = create_dataset(val_path, model_name, patch_size, val_batch_size, False, False,
-        marginalization, threads, prefetch_batches, seed)
+        marginalization, threads, prefetch_batches)  #, seed)  # seed issues to be fixed in tf
 
     iterator = tf.data.Iterator.from_structure(train_dataset.output_types,
                                                        train_dataset.output_shapes)
@@ -1044,7 +1053,7 @@ def test_normalize_unnormalize():
     assert x_norm.dtype == x_norm_correct_np.dtype
     assert x_unnorm.dtype == x_np.dtype
     assert np.allclose(x_norm, x_norm_correct_np)
-    assert ~(np.allclose(x_norm, x_np))
+    assert not np.allclose(x_norm, x_np)
     assert np.all(np.max(x_norm, axis=(0,1)) > 1)
     assert np.all(np.max(x_norm, axis=(0,1)) < 255 - means)
     assert np.all(np.min(x_norm, axis=(0,1)) < 0)
@@ -1058,7 +1067,7 @@ def test_normalize_unnormalize():
     assert x_batch_norm.dtype == x_batch_norm_correct_np.dtype
     assert x_batch_unnorm.dtype == x_batch_np.dtype
     assert np.allclose(x_batch_norm, x_batch_norm_correct_np)
-    assert ~(np.allclose(x_batch_norm, x_batch_np))
+    assert not np.allclose(x_batch_norm, x_batch_np)
     assert np.all(np.max(x_batch_norm, axis=(0,1,2)) > 1)
     assert np.all(np.max(x_batch_norm, axis=(0,1,2)) < 255 - means)
     assert np.all(np.min(x_batch_norm, axis=(0,1,2)) < 0)
@@ -1103,7 +1112,7 @@ def test_normalize_unnormalize():
     assert x_norm.dtype == x_norm_correct_np.dtype
     assert x_unnorm.dtype == x_np.dtype
     assert np.allclose(x_norm, x_norm_correct_np)
-    assert ~(np.allclose(x_norm, x_np))
+    assert not np.allclose(x_norm, x_np)
     assert np.all(np.max(x_norm, axis=(0,1)) <= 1)
     assert np.all(np.max(x_norm, axis=(0,1)) > 0)
     assert np.all(np.min(x_norm, axis=(0,1)) >= -1)
@@ -1117,7 +1126,7 @@ def test_normalize_unnormalize():
     assert x_batch_norm.dtype == x_batch_norm_correct_np.dtype
     assert x_batch_unnorm.dtype == x_batch_np.dtype
     assert np.allclose(x_batch_norm, x_batch_norm_correct_np)
-    assert ~(np.allclose(x_batch_norm, x_batch_np))
+    assert not np.allclose(x_batch_norm, x_batch_np)
     assert np.all(np.max(x_batch_norm, axis=(0,1,2)) <= 1)
     assert np.all(np.max(x_batch_norm, axis=(0,1,2)) > 0)
     assert np.all(np.min(x_batch_norm, axis=(0,1,2)) >= -1)
@@ -1472,7 +1481,8 @@ def test_num_parallel_calls():
     # execution 1
     x = get_data()
     with tf.Session() as sess:
-      x_batch1 = sess.run(x)
+      x_batch1a = sess.run(x)
+      x_batch1b = sess.run(x)
 
     # clear out everything
     tf.reset_default_graph()
@@ -1480,10 +1490,14 @@ def test_num_parallel_calls():
     # execution 2
     x = get_data()
     with tf.Session() as sess:
-      x_batch2 = sess.run(x)
+      x_batch2a = sess.run(x)
+      x_batch2b = sess.run(x)
 
-    # results should be equivalent
-    assert np.allclose(x_batch1, x_batch2)
+    # results should be equivalent across executions
+    assert np.allclose(x_batch1a, x_batch2a)
+    assert np.allclose(x_batch1b, x_batch2b)
+    assert not np.allclose(x_batch1a, x_batch1b)
+    assert not np.allclose(x_batch2a, x_batch2b)
 
   test(1)  # works with 1 thread!
 
@@ -1511,6 +1525,50 @@ def test_image_random_op_seeds():
     image_aug_value2 = sess.run(image_aug)
 
   assert np.allclose(image_aug_value1, image_aug_value2)
+
+
+def test_dataset_reinit_iter_augment_seeds():
+  import pytest
+  reset()
+
+  np.random.seed(42)
+  tf.set_random_seed(42)
+  images = np.random.rand(100, 64, 64, 3).astype(np.float32)
+
+  dataset = tf.data.Dataset.from_tensor_slices(images)  # some initial dataset
+  dataset = dataset.map(lambda image: tf.image.random_hue(image, 0.04, seed=42))
+  dataset = dataset.batch(32)
+  iterator = tf.data.Iterator.from_structure(dataset.output_types, dataset.output_shapes)
+  init_op = iterator.make_initializer(dataset)
+  x = iterator.get_next()
+
+  sess = tf.Session()
+
+  # initialize
+  sess.run(init_op)
+
+  # grab two batches
+  x_batch1a = sess.run(x)
+  x_batch1b = sess.run(x)
+
+  # reinitialize
+  sess.run(init_op)
+
+  # grab two batches
+  x_batch2a = sess.run(x)
+  x_batch2b = sess.run(x)
+
+  assert not np.allclose(x_batch1a, x_batch1b)
+  assert not np.allclose(x_batch2a, x_batch2b)
+  # ouch! these two are broken -- it turns out that a reinitializable iterator for a Dataset will
+  # cause any ops with random seeds to be reset, and thus each epoch will be evaluated exactly the
+  # same.  the desired behavior would be to seed the ops once at the very beginning, so that an
+  # entire training run can be deterministic, but not with the exact same random augmentation during
+  # each epoch
+  with pytest.raises(AssertionError):
+    assert not np.allclose(x_batch1a, x_batch2a)
+  with pytest.raises(AssertionError):
+    assert not np.allclose(x_batch1b, x_batch2b)
 
 
 def test_normalize_dtype():
