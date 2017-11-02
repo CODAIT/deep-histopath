@@ -31,7 +31,8 @@ def get_image(filename, patch_size):
     type float32 and values in [0, 1).
   """
   image_string = tf.read_file(filename)
-  image = tf.image.decode_jpeg(image_string, channels=3)  # shape (h,w,c), uint8 in [0, 255]
+  # shape (h,w,c), uint8 in [0, 255]:
+  image = tf.image.decode_jpeg(image_string, channels=3, dct_method='INTEGER_ACCURATE')
   image = tf.image.convert_image_dtype(image, dtype=tf.float32)  # float32 [0, 1)
   image = tf.image.resize_images(image, [patch_size, patch_size])  # float32 [0, 1)
   #with tf.control_dependencies([tf.assert_type(image, tf.float32, image.dtype)]):

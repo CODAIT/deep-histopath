@@ -350,7 +350,8 @@ def save_patch(patch, path, lab, case, region, row, col, rotation, row_shift, co
   # TODO: extract filename generation and arg extraction into separate functions
   filename = f"{lab}_{case}_{region}_{row}_{col}_{rotation}_{row_shift}_{col_shift}{suffix}.{ext}"
   file_path = os.path.join(path, filename)
-  Image.fromarray(patch).save(file_path)
+  # TODO: explore saving this as a PNG instead
+  Image.fromarray(patch).save(file_path, subsampling=0, quality=100)
 
 
 def preprocess(images_path, labels_path, base_save_path, train_size, patch_size, rotations_train,
