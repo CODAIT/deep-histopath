@@ -10,8 +10,6 @@ from time import gmtime, strftime
 from pathlib import Path
 import openslide
 
-import tensorflow as tf
-
 from breastcancer.preprocessing import create_tile_generator, get_20x_zoom_level
 from breastcancer.visualization import add_mark, Shape
 
@@ -36,7 +34,7 @@ def save_array_2_image(img_path, data):
   if dims == 2:
      data = (1 - data) * 255
   im = Image.fromarray(data)
-  im.save(img_path)
+  im.save(img_path, subsampling=0, quality=100)
 
 def save_mitosis_locations_2_csv(file_path, mitosis_locations):
   """ save the coordinate locations of mitoses into csv file
@@ -84,12 +82,14 @@ def check_subsetting(ROI, ROI_size, tiles, tile_size, tile_overlap, channel=3):
   except:
     return False
 
-def pad_tile_on_edge(tile, tile_size, ROI):
+def pad_tile_on_edge(tile, tile_row, tile_col, tile_size, ROI):
   """ add the padding to the tile on the edges. If the tile's center is
     outside of ROI, move it back to the edge
 
   Args:
     tile: tile value
+    tile_row: row number of the tile relative to its ROI
+    tile_col: col number of the tile relative to its ROI
     tile_size: default tile size which may be different from the input
       tile
     ROI: ROI value which contains the input tile
@@ -98,19 +98,18 @@ def pad_tile_on_edge(tile, tile_size, ROI):
     the padded tile
   """
 
-  ROI_height, ROI_width, ROI_channel = ROI.shape
   tile_height, tile_width, tile_channel = tile.shape
-  tile_row_lower = ROI_height - tile_height
-  tile_row_upper = ROI_height
-  tile_col_lower = ROI_width - tile_width
-  tile_col_upper = ROI_width
+  tile_row_lower = tile_row
+  tile_row_upper = tile_row + tile_height
+  tile_col_lower = tile_col
+  tile_col_upper = tile_col + tile_width
   # if the tile's center is outside of ROI, move it back to the edge,
   # and then add the padding
   if tile_height < tile_size / 2:
-    tile_row_lower = ROI_height - tile_size // 2
+    tile_row_lower = tile_row_upper - tile_size // 2
     tile_height = tile_size // 2
   if tile_width < tile_size / 2:
-    tile_col_lower = ROI_width - tile_size // 2
+    tile_col_lower = tile_col_upper - tile_size // 2
     tile_width = tile_size // 2
   tile = ROI[tile_row_lower: tile_row_upper, tile_col_lower: tile_col_upper, ]
   padding = ((0, tile_size - tile_height), (0, tile_size - tile_width), (0, 0))
@@ -144,24 +143,12 @@ def predict_mitoses_num_locations(model, model_name, threshold, ROI,
      the prediction result for the input ROI, (mitosis_num,
      mitosis_location_scores).
   """
+  from preprocess_mitoses import gen_dense_coords, extract_patch
   ROI_height, ROI_width, ROI_channel = ROI.shape
-  im = Image.fromarray(ROI)
-  slide = openslide.ImageSlide(im)
-  generator = create_tile_generator(slide, tile_size, tile_overlap)
-  zoom_level = generator.level_count - 1
-  cols, rows = generator.level_tiles[zoom_level]
-  tile_indices = [(zoom_level, col, row) for col in range(cols) for row in range(rows)]
-  tiles = []
-  for tile_index in tile_indices:
-    zl, col, row = tile_index
-    tile = generator.get_tile(zl, (col, row))
-    tile = np.array(tile)
 
-    # for the tile on the edge, add padding to the tile by mirroring
-    # itself
-    if tile.shape != (tile_size, tile_size, tile_channel):
-      tile = pad_tile_on_edge(tile, tile_size, ROI)
-    tiles.append(tile)
+  # gen_dense_coords function will handle the cases that the tile center point is outside of the ROI
+  tile_indices = list(gen_dense_coords(ROI_height, ROI_width, tile_size, tile_size - tile_overlap))
+  tiles = [extract_patch(ROI, row, col, tile_size) for row, col in tile_indices]
   tiles = np.stack(tiles, axis=0)
 
   # normalize the tiles. Note that if the model is vgg or resnet, the
@@ -169,16 +156,12 @@ def predict_mitoses_num_locations(model, model_name, threshold, ROI,
   from train_mitoses import normalize
   tiles = normalize(tiles / 255, model_name)
   prediction = model.predict(tiles, batch_size)
+
   isMitoses = prediction > threshold
   mitosis_location_scores = []
   for i in range(len(isMitoses)):
     if isMitoses[i]:
-      zl, col, row = tile_indices[i]
-      # handle the cases that the tile center point is outside of the
-      # ROI
-      tile_row_index = min((tile_size - tile_overlap) * row + tile_size // 2, ROI_height - 1)
-      tile_col_index = min((tile_size - tile_overlap) * col + tile_size // 2, ROI_width - 1)
-
+      tile_row_index, tile_col_index = tile_indices[i]
       mitosis_location_scores.append((tile_row_index, tile_col_index, np.asscalar(prediction[i])))
 
   mitosis_num = len(mitosis_location_scores)
@@ -264,6 +247,9 @@ def predict_mitoses_help(model_file, model_name, index, file_partition,
       # get the ROI
       zl, col, row = ROI_index
       ROI = np.asarray(generator.get_tile(zl, (col, row)))
+      # skip the ROIs whose size is smaller than the tile size
+      if ROI.shape[0] < tile_size or ROI.shape[1] < tile_size:
+        continue
       mitosis_location_score_list = []
       # predict the mitoses with location information
       mitosis_num, mitosis_location_scores  = predict_mitoses_num_locations(model=model,
