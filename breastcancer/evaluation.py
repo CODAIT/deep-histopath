@@ -246,3 +246,154 @@ def test_add_ground_truth_mark():
 
   add_ground_truth_mark(sparkContext, partition_num, im_dir, im_suffix, ground_truth_dir,
                         ground_truth_file_suffix, Shape.CIRCLE, hasHeader)
+
+
+def test_img_quality():
+  # this test shows the image quality difference between different image
+  # formats (e.g., tif, png, jpeg) and different libraries (e.g., openslide,
+  # PIL, Tensorflow) with different reading parameters. The experiment
+  # results indicate that tif and png have the highest quality; JPEG changes
+  # a lot of pixel values when it compresses the images, but has the smallest
+  # file size.
+
+  import os
+  import openslide
+  import tensorflow as tf
+  from breastcancer.preprocessing import create_tile_generator, get_20x_zoom_level
+  import pandas as pd
+
+  # all the output images from these reader functions are in the type of
+  # np.int instead of np.uint8, which avoids the invalid value when
+  # computing the difference between two images
+
+  def read_img_openslide(img_file):
+    slide = openslide.open_slide(img_file)
+    ROI_size = max(slide.dimensions)
+    generator = create_tile_generator(slide, ROI_size, 0)
+    zoom_level = get_20x_zoom_level(slide, generator)
+    cols, rows = generator.level_tiles[zoom_level]
+    ROI_indices = [(zoom_level, col, row) for col in range(cols) for row in range(rows)]
+    zl, col, row = ROI_indices[0]
+    img_openslide = np.asarray(generator.get_tile(zl, (col, row)), dtype=np.int)
+    return img_openslide
+
+  def read_img_PIL(img_file):
+    img_PIL = Image.open(img_file)
+    img_PIL = np.array(img_PIL, dtype=np.int)
+    return img_PIL
+
+  def read_jpeg_tf_fast(jpg_file):
+    image_string = tf.read_file(jpg_file)
+    img_tensor_fast = tf.image.decode_jpeg(image_string, channels=3, dct_method='INTEGER_FAST')
+
+    with tf.Session() as sess:
+      img_tf_fast = sess.run(img_tensor_fast).astype(np.int)
+    return img_tf_fast
+
+  def read_jpeg_tf_accurate(jpg_file):
+    image_string = tf.read_file(jpg_file)
+    img_tensor_accurate = tf.image.decode_jpeg(image_string, channels=3,
+                                               dct_method='INTEGER_ACCURATE')
+    with tf.Session() as sess:
+      img_tf_accurate = sess.run(img_tensor_accurate).astype(np.int)
+    return img_tf_accurate
+
+  def read_png_tf(png_file):
+    image_string = tf.read_file(png_file)
+    img_tensor_png = tf.image.decode_png(image_string, channels=3, dtype=tf.uint8)
+    with tf.Session() as sess:
+      img_tf_png = sess.run(img_tensor_png).astype(np.int)
+    return img_tf_png
+
+  def compute_diff(img1, img2, threshold=0):
+    diff = np.sum(np.abs(img1 - img2) > threshold)/img1.size
+    return diff
+
+  # generate an image array
+  img_orig = np.random.randint(low=0, high=256, size=(2000, 2000, 3), dtype=np.uint8)
+
+  # save the image array as the tif file
+  tif_file = "test.tif"
+  Image.fromarray(img_orig).save(tif_file, subsampling=0, quality=100)
+
+  img_tif = Image.open(tif_file)
+  # save the image array from the tif file into: 1) low-quality jpeg:
+  # using the default configuration of PIL; 2) high-quality jpeg:
+  # adding the customized configuration for PIL to generate a
+  # high-quality JPG; 3) png
+  jpg_lq_file = "test_lq.jpg"
+  jpg_hq_file = "test_hq.jpg"
+  png_file = "test.png"
+  img_tif.save(jpg_lq_file)
+  img_tif.save(jpg_hq_file, subsampling=0, quality=100)
+  img_tif.save(png_file)
+  img_tif.close()
+
+  # start to test the reading result from OpenSlide, PIL, and Tensorflow
+
+  # convert the data type of original image from uint8 to int
+  img_orig = img_orig.astype(np.int)
+
+  # read images using openslide
+  img_openslide_jpg_lq = read_img_openslide(jpg_lq_file)
+  img_openslide_jpg_hq = read_img_openslide(jpg_hq_file)
+  img_openslide_tif = read_img_openslide(tif_file)
+  img_openslide_png = read_img_openslide(png_file)
+
+  # read images using PIL
+  img_PIL_jpg_lq = read_img_PIL(jpg_lq_file)
+  img_PIL_jpg_hq = read_img_PIL(jpg_hq_file)
+  img_PIL_tif = read_img_PIL(tif_file)
+  img_PIL_png = read_img_PIL(png_file)
+
+  # read images using Tensorflow
+  img_tf_jpg_lq_fast = read_jpeg_tf_fast(jpg_lq_file)
+  img_tf_jpg_lq_accurate = read_jpeg_tf_accurate(jpg_lq_file)
+  img_tf_jpg_hq_fast = read_jpeg_tf_fast(jpg_hq_file)
+  img_tf_jpg_hq_accurate = read_jpeg_tf_accurate(jpg_hq_file)
+  img_tf_png = read_png_tf(png_file)
+
+  # evaluate the difference between different images using different
+  # libraries
+  img_name_list = ["orig_img", "openslide_tif", "PIL_tif", "openslide_png", "PIL_png", "tf_png",
+                   "openslide_jpg_lq", "openslide_jpg_hq", "PIL_jpg_lq", "PIL_jpg_hq",
+                   "tf_jpg_lq_fast", "tf_jpg_lq_accurate", "tf_jpg_hq_fast", "tf_jpg_hq_accurate"]
+
+  img_dict = {"orig_img": img_orig,
+               "openslide_tif": img_openslide_tif,
+               "PIL_tif": img_PIL_tif,
+               "openslide_png": img_openslide_png,
+               "PIL_png": img_PIL_png,
+               "tf_png": img_tf_png,
+               "openslide_jpg_lq": img_openslide_jpg_lq,
+               "openslide_jpg_hq": img_openslide_jpg_hq,
+               "PIL_jpg_lq": img_PIL_jpg_lq,
+               "PIL_jpg_hq": img_PIL_jpg_hq,
+               "tf_jpg_lq_fast": img_tf_jpg_lq_fast,
+               "tf_jpg_lq_accurate": img_tf_jpg_lq_accurate,
+               "tf_jpg_hq_fast": img_tf_jpg_hq_fast,
+               "tf_jpg_hq_accurate": img_tf_jpg_hq_accurate}
+
+  num_img = len(img_name_list)
+  diff = np.empty([num_img, num_img], dtype=np.float32)
+
+  # compute the difference ratio between different images
+  threshold = 0 # threshold to judge whether two pixels are different
+  for row in range(num_img):
+    for col in range(num_img):
+      diff[row][col] = compute_diff(img_dict[img_name_list[row]],
+                                    img_dict[img_name_list[col]],
+                                    threshold=threshold)
+
+  # organize the comparison result into data frame, and print it out as
+  # table
+  df = pd.DataFrame(diff, img_name_list, img_name_list)
+  with pd.option_context("display.max_rows", num_img, "display.max_columns", num_img,
+                         'expand_frame_repr', False):
+    print(df)
+
+  # delete the temporary file
+  os.remove(tif_file)
+  os.remove(jpg_hq_file)
+  os.remove(jpg_lq_file)
+  os.remove(png_file)
