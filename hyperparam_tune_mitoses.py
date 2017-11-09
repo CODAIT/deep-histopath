@@ -5,6 +5,7 @@ import random
 
 import numpy as np
 import tensorflow as tf
+import keras.backend as K
 
 import train_mitoses
 
@@ -25,26 +26,24 @@ def main(args=None):
   parser.add_argument("--val_batch_size", type=int, default=32,
       help="validation batch size for all experiments (default: %(default)s)")
   parser.add_argument("--clf_epochs", type=int, default=5,
-      help="number of epochs for which to train the new classifier layers "\
-           "(default: %(default)s)")
+      help="number of epochs for which to train the new classifier layers (default: %(default)s)")
   parser.add_argument("--finetune_epochs", type=int, default=5,
       help="number of epochs for which to fine-tune the unfrozen layers (default: %(default)s)")
-  parser.add_argument("--clf_lr_range", nargs=2, type=float, default=(1e-5, 1),
-      help="half-open interval range for the learning rate for training the new classifier layers "\
+  parser.add_argument("--clf_lr_range", nargs=2, type=float, default=(1e-5, 1e-2),
+      help="half-open interval for the learning rate for training the new classifier layers "\
            "(default: %(default)s)")
   parser.add_argument("--finetune_lr_range", nargs=2, type=float, default=(1e-7, 1e-2),
-      help="half-open interval range for the learning rate for fine-tuning the unfrozen layers "\
+      help="half-open interval for the learning rate for fine-tuning the unfrozen layers "\
            "(default: %(default)s)")
-  parser.add_argument("--finetune_momentum_range", nargs=2, type=float, default=(0.9, 0.999),
-      help="half-open interval range for the momentum rate for fine-tuning the unfrozen layers "\
+  parser.add_argument("--finetune_momentum_range", nargs=2, type=float, default=(0.85, 0.95),
+      help="half-open interval for the momentum rate for fine-tuning the unfrozen layers "\
            "(default: %(default)s)")
   parser.add_argument("--finetune_layers", nargs='*', type=int, default=[0, -1],
       help="list of the number of layers at the end of the pretrained portion of the model to "\
            "fine-tune (note: the new classifier layers will still be trained during fine-tuning "\
            "as well) (default: %(default)s)")
-  parser.add_argument("--l2_range", nargs=2, type=float, default=[0, 1e-1],
-      help="half-closed interval range for the amount of l2 weight regularization "\
-           "(default: %(default)s)")
+  parser.add_argument("--l2_range", nargs=2, type=float, default=[0, 1e-2],
+      help="half-closed interval for the amount of l2 weight regularization (default: %(default)s)")
   augment_parser = parser.add_mutually_exclusive_group(required=False)
   augment_parser.add_argument("--augment", dest="augment", action="store_true",
       help="apply random augmentation to the training images (default: True)")
@@ -55,9 +54,9 @@ def main(args=None):
       help="use noise marginalization when evaluating the validation set. if this is set, then "\
            "the validation batch_size must be divisible by 4, or equal to 1 for no augmentation "\
            "(default: %(default)s)")
-  parser.add_argument("--threads", type=int, default=1,
+  parser.add_argument("--threads", type=int, default=5,
       help="number of threads for dataset parallel processing; note: this will cause "\
-           "non-reproducibility (default: %(default)s)")
+           "non-reproducibility for values > 1 (default: %(default)s)")
   parser.add_argument("--prefetch_batches", type=int, default=100,
       help="number of batches to prefetch (default: %(default)s)")
   parser.add_argument("--log_interval", type=int, default=100,
@@ -127,6 +126,9 @@ def main(args=None):
       train_mitoses.main(train_args)
     except tf.errors.InvalidArgumentError:  # if values become nan or inf
       print("Experiment failed!")
+
+    # it is necessary to completely reset everything in between experiments
+    K.clear_session()
 
 
 if __name__ == "__main__":
