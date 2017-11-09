@@ -32,7 +32,7 @@ def get_image(filename, patch_size):
   """
   image_string = tf.read_file(filename)
   # shape (h,w,c), uint8 in [0, 255]:
-  image = tf.image.decode_png(image_string, channels=3),
+  image = tf.image.decode_png(image_string, channels=3)
   image = tf.image.convert_image_dtype(image, dtype=tf.float32)  # float32 [0, 1)
   image = tf.image.resize_images(image, [patch_size, patch_size])  # float32 [0, 1)
   #with tf.control_dependencies([tf.assert_type(image, tf.float32, image.dtype)]):
@@ -1004,6 +1004,27 @@ def reset():
 
 # data
 
+def test_get_image(tmpdir):
+  # NOTE: pytest will provide a temp directory automatically:
+  # https://docs.pytest.org/en/latest/tmpdir.html
+  from PIL import Image
+  reset()
+
+  # create png image
+  filename = os.path.join(str(tmpdir), "x.png")
+  x = np.random.randint(0, 255, dtype=np.uint8, size=(64,64,3))
+  Image.fromarray(x).save(filename)
+
+  image_op = get_image(filename, 64)
+  sess = K.get_session()
+  image = sess.run(image_op)
+
+  assert image.shape == (64, 64, 3)
+  assert image.dtype == np.float32
+  assert np.min(image) >= 0
+  assert np.max(image) < 1
+
+
 def test_get_label():
   import pytest
 
@@ -1030,6 +1051,32 @@ def test_get_label():
     label_op = get_label(filename)
     sess = K.get_session()
     label = sess.run(label_op)
+
+
+def test_preprocess(tmpdir):
+  # NOTE: pytest will provide a temp directory automatically:
+  # https://docs.pytest.org/en/latest/tmpdir.html
+  from PIL import Image
+  reset()
+
+  # create png image
+  folder = os.path.join(str(tmpdir), "this/train/mitosis")
+  os.makedirs(folder)
+  filename_orig = os.path.join(folder, "x.png")
+
+  x = np.random.randint(0, 255, dtype=np.uint8, size=(64,64,3))
+  Image.fromarray(x).save(filename_orig)
+
+  image_op, label_op, filename_op = preprocess(tf.constant(filename_orig), 64)
+  sess = K.get_session()
+  image, label, filename = sess.run([image_op, label_op, filename_op])
+
+  assert image.shape == (64, 64, 3)
+  assert image.dtype == np.float32
+  assert np.min(image) >= 0
+  assert np.max(image) < 1
+  assert label == 1.0
+  assert filename.decode("utf-8") == filename_orig
 
 
 def test_normalize_unnormalize():
@@ -1157,6 +1204,49 @@ def test_normalize_unnormalize():
   x_batch_norm_np, x_batch_unnorm_np = sess.run([x_batch_norm, x_batch_unnorm],
       feed_dict={x_batch: x_batch_np})
   test_batch(x_batch_norm_np, x_batch_unnorm_np)
+
+
+def test_augment(tmpdir):
+  # NOTE: pytest will provide a temp directory automatically:
+  # https://docs.pytest.org/en/latest/tmpdir.html
+  from PIL import Image
+  reset()
+
+  # create png image
+  filename = os.path.join(str(tmpdir), "x.png")
+  x = np.random.randint(0, 255, dtype=np.uint8, size=(64,64,3))
+  Image.fromarray(x).save(filename)
+
+  image_op = get_image(filename, 64)
+  aug_image_op = augment(image_op)
+  sess = K.get_session()
+  image, aug_image = sess.run([image_op, aug_image_op])
+
+  assert aug_image.shape == (64, 64, 3)
+  assert aug_image.dtype == np.float32
+  assert np.min(aug_image) >= 0
+  assert np.max(aug_image) <= 1
+  assert not np.allclose(aug_image, x/255)
+  assert not np.allclose(aug_image, image)
+
+  # seeds
+  reset()
+  image_op = get_image(filename, 64)
+  aug_image_op1 = augment(image_op, 1)
+  aug_image_op2 = augment(image_op, 2)
+  sess = K.get_session()
+  aug_image1a, aug_image2a = sess.run([aug_image_op1, aug_image_op2])
+
+  reset()
+  image_op = get_image(filename, 64)
+  aug_image_op1 = augment(image_op, 1)
+  aug_image_op2 = augment(image_op, 2)
+  sess = K.get_session()
+  aug_image1b, aug_image2b = sess.run([aug_image_op1, aug_image_op2])
+
+  assert np.allclose(aug_image1a, aug_image1b)
+  assert np.allclose(aug_image2a, aug_image2b)
+  assert not np.allclose(aug_image1a, aug_image2a)
 
 
 def test_create_augmented_batch():
