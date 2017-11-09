@@ -63,17 +63,18 @@ def extract_patch(im, row, col, size):
   reflected to yield a patch of the desired size.
 
   Args:
-    im: An image stored as a NumPy array of shape (h, w, c).
+    im: An image stored as a NumPy array of shape (h, w, ...).
     row: An integer row number.
     col: An integer col number.
     size: An integer size of the square patch to extract.
 
   Returns:
-    A NumPy array of shape (size, size, c).
+    A NumPy array of shape (size, size, ...).
   """
   # check that row, col, and size are within the image bounds
-  assert np.ndim(im) == 3, "image must be of shape (h, w, c)"
-  h, w, c = im.shape
+  dims = np.ndim(im)
+  assert dims >= 2, "image must be of shape (h, w, ...)"
+  h, w = im.shape[0:2]
   assert 0 <= row <= h, "row is outside of the image height"
   assert 0 <= col <= w, "col is outside of the image width"
   assert 1 < size <= min(h, w), "size must be >1 and within the bounds of the image"
@@ -98,8 +99,9 @@ def extract_patch(im, row, col, size):
   # extract patch
   patch = im[row_lower:row_upper, col_lower:col_upper]
 
-  # pad with reflection as needed to yield a patch of the desired size
-  padding = ((row_pad_lower, row_pad_upper), (col_pad_lower, col_pad_upper), (0, 0))
+  # pad with reflection on the height and width as needed to yield a patch of the desired size
+  # NOTE: all remaining dimensions (such as channels) receive 0 padding
+  padding = ((row_pad_lower, row_pad_upper), (col_pad_lower, col_pad_upper)) + ((0, 0),) * (dims-2)
   patch_padded = np.pad(patch, padding, 'reflect')
 
   return patch_padded
@@ -126,13 +128,10 @@ def gen_dense_coords(h, w, size, stride):
   assert 1 < size <= min(h, w), "size must be > 1 and within the bounds of the image"
   assert stride > 0, "stride must be an integer > 0"
 
-  half_size = round(size / 2)
-
   # generate coordinates
-  for row in range(0, h-size+1, stride):
-    for col in range(0, w-size+1, stride):
-      # TODO: should this actually start at (0, 0) so that there is mirroring on the left and top?
-      yield row + half_size, col + half_size  # centered coordinates for this patch
+  for row in range(0, h, stride):
+    for col in range(0, w, stride):
+      yield row, col  # centered coordinates for this patch
 
 
 def gen_normal_coords(mask, size, stride, threshold):
@@ -163,7 +162,7 @@ def gen_normal_coords(mask, size, stride, threshold):
 
   for row, col in gen_dense_coords(h, w, size, stride):
     # extract patch from mask to check for overlap with mitosis patch
-    mask_patch = np.squeeze(extract_patch(np.atleast_3d(mask), row, col, size))
+    mask_patch = extract_patch(mask, row, col, size)
     if np.mean(mask_patch) <= threshold:
       yield row, col
 
@@ -713,6 +712,7 @@ def test_extract_patch():
   # create image
   h, w, c = 100, 200, 3
   im = np.random.rand(h, w, c)
+  im2d = np.random.rand(h, w)
 
   # row error
   with pytest.raises(AssertionError):
@@ -742,12 +742,16 @@ def test_extract_patch():
   # row, col, size on boundary
   row, col, size = 0, 0, h
   patch = extract_patch(im, row, col, size)
+  patch2d = extract_patch(im2d, row, col, size)
   assert patch.shape == (size, size, c)
+  assert patch2d.shape == (size, size)
 
   # row, col, size on another boundary
   row, col, size = h, w, h
   patch = extract_patch(im, row, col, size)
+  patch2d = extract_patch(im2d, row, col, size)
   assert patch.shape == (size, size, c)
+  assert patch2d.shape == (size, size)
 
   # normal row, col, size
   row, col, size = 50, 40, 32
@@ -815,8 +819,9 @@ def test_gen_dense_coords():
   w = 8
   size = 4
   stride = size - 2
-  correct_coords = [(2, 2), (2, 4), (2, 6),
-                    (4, 2), (4, 4), (4, 6)]
+  correct_coords = [(0, 0), (0, 2), (0, 4), (0, 6),
+                    (2, 0), (2, 2), (2, 4), (2, 6),
+                    (4, 0), (4, 2), (4, 4), (4, 6)]
   coords = list(gen_dense_coords(h, w, size, stride))
   assert coords == correct_coords
 
@@ -882,7 +887,7 @@ def test_gen_normal_coords():
   threshold = 0.25
   mask = np.zeros((h, w), dtype=bool)
   mask[0:size, 0:size] = True
-  correct_coords = [(2, 6), (4, 4), (4, 6)]
+  correct_coords = [(0, 6), (2, 6), (4, 4), (4, 6)]
   coords = list(gen_normal_coords(mask, size, stride, threshold))
   assert coords == correct_coords
 
