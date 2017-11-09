@@ -1023,6 +1023,8 @@ def test_get_image(tmpdir):
   assert image.dtype == np.float32
   assert np.min(image) >= 0
   assert np.max(image) < 1
+  assert np.allclose(x.astype(np.float32) / 255, image)
+  assert np.allclose((x / 255).astype(np.float32), image)
 
 
 def test_get_label():
@@ -1107,7 +1109,7 @@ def test_normalize_unnormalize():
     assert np.all(np.max(x_norm, axis=(0,1)) < 255 - means)
     assert np.all(np.min(x_norm, axis=(0,1)) < 0)
     assert np.all(np.min(x_norm, axis=(0,1)) > 0 - means)
-    assert np.allclose(x_unnorm, x_np, rtol=5.e-5)  #, atol=1e-7)
+    assert np.allclose(x_unnorm, x_np, rtol=1e-4)  #, atol=1e-7)
 
   # batch of examples
   def test_batch(x_batch_norm, x_batch_unnorm):
@@ -1166,7 +1168,7 @@ def test_normalize_unnormalize():
     assert np.all(np.max(x_norm, axis=(0,1)) > 0)
     assert np.all(np.min(x_norm, axis=(0,1)) >= -1)
     assert np.all(np.min(x_norm, axis=(0,1)) < 0)
-    assert np.allclose(x_unnorm, x_np, rtol=5.e-5)  #, atol=1e-7)
+    assert np.allclose(x_unnorm, x_np, rtol=1e-4)  #, atol=1e-7)
 
   # batch of examples
   def test_batch(x_batch_norm, x_batch_unnorm):
