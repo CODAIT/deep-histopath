@@ -535,10 +535,10 @@ if __name__ == "__main__":
            "(default: `round(patch_size/4)`)")
   parser.add_argument("--stride_train", type=int,
       help="number of pixels by which to shift in the sliding window for normal patches in the "\
-           "training set (default: `patch_size`)")
+           "training set (default: `patch_size/4`)")
   parser.add_argument("--stride_val", type=int,
       help="number of pixels by which to shift in the sliding window for normal patches in the "\
-           "validation set (default: `patch_size`)")
+           "validation set (default: `patch_size/4`)")
   parser.add_argument("--overlap_threshold", type=lambda x: check_float_range(x, 0, 1),
       default=0.25, help="decimal inclusive upper bound on the percentage of overlap of normal "\
                          "patches with mitosis patches (default: %(default)s)")
@@ -569,10 +569,10 @@ if __name__ == "__main__":
     args.max_shift = round(args.patch_size/4)
 
   if args.stride_train is None:
-    args.stride_train = args.patch_size
+    args.stride_train = round(args.patch_size/4)
 
   if args.stride_val is None:
-    args.stride_val = args.patch_size
+    args.stride_val = round(args.patch_size/4)
 
   # create a random seed if needed
   if args.seed is None:
