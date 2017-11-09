@@ -32,7 +32,7 @@ def get_image(filename, patch_size):
   """
   image_string = tf.read_file(filename)
   # shape (h,w,c), uint8 in [0, 255]:
-  image = tf.image.decode_jpeg(image_string, channels=3, dct_method='INTEGER_ACCURATE')
+  image = tf.image.decode_png(image_string, channels=3),
   image = tf.image.convert_image_dtype(image, dtype=tf.float32)  # float32 [0, 1)
   image = tf.image.resize_images(image, [patch_size, patch_size])  # float32 [0, 1)
   #with tf.control_dependencies([tf.assert_type(image, tf.float32, image.dtype)]):
@@ -259,7 +259,8 @@ def create_dataset(path, model_name, patch_size, batch_size, shuffle, augmentati
     A Dataset object.
   """
   # read & process images
-  dataset = tf.data.Dataset.list_files(os.path.join(path, "*", "*.jpg"))
+  #dataset = tf.data.Dataset.list_files(os.path.join(path, "*", "*.{png,jpg}"))  # not supported
+  dataset = tf.data.Dataset.list_files(os.path.join(path, "*", "*.png"))
 
   if shuffle:
     dataset = dataset.shuffle(500000)
@@ -877,7 +878,7 @@ def main(args=None):
            "(default: %%y-%%m-%%d_%%H:%%M:%%S_{model})")
   parser.add_argument("--exp_name_suffix", default=None,
       help="suffix to add to experiment name (default: all parameters concatenated together)")
-  parser.add_argument("--model", default="vgg",
+  parser.add_argument("--model", default="vgg", choices=["logreg", "vgg", "vgg19", "resnet"],
       help="name of the model to use in ['logreg', 'vgg', 'vgg19', 'resnet'] "\
            "(default: %(default)s)")
   parser.add_argument("--patch_size", type=int, default=64,

@@ -320,7 +320,7 @@ def gen_patches(im, coords, size, rotations, translations, max_shift, p):
 
 
 def save_patch(patch, path, lab, case, region, row, col, rotation, row_shift, col_shift, suffix="",
-    ext="jpg"):
+    ext="png"):
   """Save an image patch with an appropriate filename.
 
   The filename should contain all of the information needed to be able
@@ -350,7 +350,7 @@ def save_patch(patch, path, lab, case, region, row, col, rotation, row_shift, co
   # TODO: extract filename generation and arg extraction into separate functions
   filename = f"{lab}_{case}_{region}_{row}_{col}_{rotation}_{row_shift}_{col_shift}{suffix}.{ext}"
   file_path = os.path.join(path, filename)
-  # TODO: explore saving this as a PNG instead
+  # NOTE: the subsampling and quality parameters will only affect jpeg images
   Image.fromarray(patch).save(file_path, subsampling=0, quality=100)
 
 
@@ -1003,4 +1003,28 @@ def test_gen_patches():
   # normal
   patch_gen = gen_patches(im, coords, size, rotations, translations, max_shift, p)
   assert len(list(patch_gen)) > 0
+
+
+def test_pil_image_saving(tmpdir):
+  # NOTE: pytest will provide a temp directory automatically:
+  # https://docs.pytest.org/en/latest/tmpdir.html
+  tmpdir = str(tmpdir)
+  x = np.random.randint(0, 255, dtype=np.uint8, size=(64,64,3))
+  Image.fromarray(x).save(os.path.join(tmpdir, "x1.png"))
+  Image.fromarray(x).save(os.path.join(tmpdir, "x2.png"), subsampling=0, quality=100)
+  Image.fromarray(x).save(os.path.join(tmpdir, "x1.jpg"))
+  Image.fromarray(x).save(os.path.join(tmpdir, "x2.jpg"), subsampling=0, quality=100)
+  Image.fromarray(x).save(os.path.join(tmpdir, "x2.jpeg"), subsampling=0, quality=100)
+
+  x1png = np.asarray(Image.open(os.path.join(tmpdir, "x1.png")))
+  x2png = np.asarray(Image.open(os.path.join(tmpdir, "x2.png")))
+  x1jpg = np.asarray(Image.open(os.path.join(tmpdir, "x1.jpg")))
+  x2jpg = np.asarray(Image.open(os.path.join(tmpdir, "x2.jpg")))
+  x2jpeg = np.asarray(Image.open(os.path.join(tmpdir, "x2.jpeg")))
+
+  assert np.array_equal(x1png, x2png)
+  assert not np.array_equal(x1jpg, x2jpg)
+  assert not np.array_equal(x1png, x1jpg)
+  assert not np.array_equal(x1png, x2jpg)
+  assert np.array_equal(x2jpg, x2jpeg)
 
