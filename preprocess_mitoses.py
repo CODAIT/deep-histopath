@@ -102,10 +102,12 @@ def extract_patch(im, row, col, size):
   # pad with reflection on the height and width as needed to yield a patch of the desired size
   # NOTE: all remaining dimensions (such as channels) receive 0 padding
   padding = ((row_pad_lower, row_pad_upper), (col_pad_lower, col_pad_upper)) + ((0, 0),) * (dims-2)
+
+  # Note: the padding content starts from the second row/col of the
+  # input patch instead of the first row/col
   patch_padded = np.pad(patch, padding, 'reflect')
 
   return patch_padded
-
 
 def gen_dense_coords(h, w, size, stride):
   """Generate centered (row, col) coordinates of patches densely from an
@@ -1032,4 +1034,77 @@ def test_pil_image_saving(tmpdir):
   assert not np.array_equal(x1png, x1jpg)
   assert not np.array_equal(x1png, x2jpg)
   assert np.array_equal(x2jpg, x2jpeg)
+
+
+def test_gen_patches_extract_patches():
+  """ this test wants to show the difference between `extract_patch`
+    and `gen_patches`, both of which could be used to generate patches
+    from the input images but their content will be a little different
+    for the patches on the edge, even if setting the rotation,
+    translation, and shift for `gen_patches` to be 0. The differences
+    between them are 1) `extract_patch` directly extracts the patch
+    from the image; if the patch is located on the edge, some padding
+    parts will be added to make it as big as the input size; 2)
+    `gen_patches` is more complicated than `extract_patch`. To support
+    rotation, translation, and shift, `gen_patches` will firstly extract
+    a bigger patch than the input size using `extract_patch`, and then
+    extract the target batch from the bigger patch. If the bigger patch
+    is located on the edge, it will be added with some padding.
+    Considering the above different workflow, 'extract_patch' and
+    `gen_patches` will generate different patches when the patch is
+    located on some edges. The difference will be their first row/col.
+    It is caused by `np.pad(patch, padding, 'reflect')`. When the
+    padding size is bigger than the input patch size, the padding
+    content will be repeated until reaching the padding size. This
+    repeating process will result in the different repeat pattern for
+    the patches with different size even if they are extracted by the
+    same coordinates from the same image.
+  """
+  import pytest
+  img_org = np.random.randint(low=0, high=256, size=(2000, 2000, 3), dtype=np.uint8)
+
+  # for the patch on the upper edge
+  img_extract_patch = extract_patch(img_org, 0, 384, 64)
+
+  img_gen_patches = list(gen_patches(im=img_org, coords=[(0, 384)], size=64, rotations=0,
+                             translations=0, max_shift=0, p=1))[0][0]
+
+  assert np.allclose(img_extract_patch[1:,], img_gen_patches[1:,]) # same
+
+  with pytest.raises(AssertionError):
+    assert np.allclose(img_extract_patch, img_gen_patches) # different at the first row
+
+  # for the patch in the internal
+  img_extract_patch = extract_patch(img_org, 500, 384, 64)
+
+  img_gen_patches = list(gen_patches(im=img_org, coords=[(500, 384)], size=64, rotations=0,
+                             translations=0, max_shift=0, p=1))[0][0]
+
+  assert np.allclose(img_extract_patch, img_gen_patches) # same
+
+  # for the patch on the down edge
+  img_extract_patch = extract_patch(img_org, 1999, 384, 64)
+
+  img_gen_patches = list(gen_patches(im=img_org, coords=[(1999, 384)], size=64, rotations=0,
+                             translations=0, max_shift=0, p=1))[0][0]
+
+  assert np.allclose(img_extract_patch, img_gen_patches) # same
+
+  # for the patch on the left edge
+  img_extract_patch = extract_patch(img_org, 384, 0, 64)
+
+  img_gen_patches = list(gen_patches(im=img_org, coords=[(384, 0)], size=64, rotations=0,
+                                     translations=0, max_shift=0, p=1))[0][0]
+
+  assert np.allclose(img_extract_patch[:,1:], img_gen_patches[:, 1:])  # same
+  with pytest.raises(AssertionError):
+    assert np.allclose(img_extract_patch, img_gen_patches) # different at the first col
+
+  # for the patch on the right edge
+  img_extract_patch = extract_patch(img_org, 384, 1999, 64)
+
+  img_gen_patches = list(gen_patches(im=img_org, coords=[(384, 1999)], size=64, rotations=0,
+                                     translations=0, max_shift=0, p=1))[0][0]
+
+  assert np.allclose(img_extract_patch, img_gen_patches)  # same
 

@@ -5,8 +5,27 @@ import os
 import argparse
 import shutil
 from pyspark.sql import SparkSession
-from breastcancer.inference import predict_mitoses, save_array_2_image
-from preprocess_mitoses import create_mask
+from breastcancer.inference import predict_mitoses
+
+def flat_result_2_row(predictions):
+  """ flat the mitosis prediction result into rows
+
+  Args:
+    predictions: a tuple of (slide_id, ROI, mitosis_num,
+      mitosis_location_scores), where mitosis_location_scores is a list
+      of tuples (r, c, score)
+  Return:
+    a list of tuples(slide_id, ROI, mitosis_num, r, c, score)
+  """
+
+  result = []
+  if predictions:
+    for pred in predictions:
+      slide_id, ROI, mitosis_num, mitosis_location_scores = pred
+      for r, c, score in mitosis_location_scores:
+        result.append((slide_id, ROI, mitosis_num, r, c, score))
+  return result
+
 
 def main(args=None):
   # parse args
@@ -47,6 +66,7 @@ def main(args=None):
                       help="save the locations of the detected mitoses to csv")
   parser.add_argument("--save_mask", default=False, dest="save_mask", action='store_true',
                       help="save the locations of the detected mitoses as a mask image ")
+  parser.add_argument("--pred_save_path", required=True, help="file path to save the prediction results")
   parser.add_argument("--debug", default=False, dest='isDebug', action='store_true',
                       help="print the debug information")
 
@@ -72,7 +92,7 @@ def main(args=None):
   sparkContext.addPyFile(zipname)
   sparkContext.addPyFile("train_mitoses.py")
   sparkContext.addPyFile("preprocess_mitoses.py")
-
+  sparkContext.addPyFile("resnet50.py")
   predict_result_rdd = predict_mitoses(sparkContext=sparkContext, model_path=args.model_path,
                                        model_name=args.model_name,
                                        input_dir=args.slide_path, file_suffix=args.file_suffix,
@@ -85,8 +105,13 @@ def main(args=None):
                                        batch_size=args.batch_size,
                                        save_mitosis_locations=args.save_mitosis_locations,
                                        save_mask=args.save_mask, isDebug=args.isDebug)
-  print(predict_result_rdd.collect())
 
+  pred_rows = predict_result_rdd.flatMap(lambda t: flat_result_2_row(t)).cache()
+
+  df = spark.createDataFrame(pred_rows, ['slide_id', 'ROI_id', 'mitosis_num_per_ROI', 'row_num',
+                                         'col_num', 'score'])
+  df.toPandas().to_csv(args.pred_save_path, header=True)
+  df.show()
 
 if __name__ == "__main__":
   main()

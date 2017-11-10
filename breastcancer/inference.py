@@ -34,7 +34,7 @@ def save_array_2_image(img_path, data):
   if dims == 2:
      data = (1 - data) * 255
   im = Image.fromarray(data)
-  im.save(img_path, subsampling=0, quality=100)
+  im.save(img_path)
 
 def save_mitosis_locations_2_csv(file_path, mitosis_locations):
   """ save the coordinate locations of mitoses into csv file
@@ -45,7 +45,10 @@ def save_mitosis_locations_2_csv(file_path, mitosis_locations):
   """
   df = pd.DataFrame(mitosis_locations)
   df.columns = ["row", "col", "score"]
-  df.to_csv(file_path, index=False)
+  #df.to_csv(file_path, index=False)
+  # skip the header and the score column to match the requirement of the
+  # preprocess_mitoses.py
+  df[["row", "col"]].to_csv(file_path, index=False, header=False)
 
 def check_subsetting(ROI, ROI_size, tiles, tile_size, tile_overlap, channel=3):
   """ check if the generation of tiles is right by re-combine the tiles
@@ -143,18 +146,20 @@ def predict_mitoses_num_locations(model, model_name, threshold, ROI,
      the prediction result for the input ROI, (mitosis_num,
      mitosis_location_scores).
   """
-  from preprocess_mitoses import gen_dense_coords, extract_patch
+  from preprocess_mitoses import gen_dense_coords, extract_patch, gen_patches
   ROI_height, ROI_width, ROI_channel = ROI.shape
 
   # gen_dense_coords function will handle the cases that the tile center point is outside of the ROI
   tile_indices = list(gen_dense_coords(ROI_height, ROI_width, tile_size, tile_size - tile_overlap))
-  tiles = [extract_patch(ROI, row, col, tile_size) for row, col in tile_indices]
+  #tiles = [extract_patch(ROI, row, col, tile_size) for row, col in tile_indices]
+  tiles = [element[0] for element in gen_patches(ROI, tile_indices, tile_size, rotations=0,
+                                                      translations=0, max_shift=0, p=1)]
   tiles = np.stack(tiles, axis=0)
 
   # normalize the tiles. Note that if the model is vgg or resnet, the
   # channel order is changed in the normalization
   from train_mitoses import normalize
-  tiles = normalize(tiles / 255, model_name)
+  tiles = normalize((tiles / 255).astype(dtype=np.float32), model_name)
   prediction = model.predict(tiles, batch_size)
 
   isMitoses = prediction > threshold
