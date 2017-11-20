@@ -4,9 +4,10 @@ Evaluate the prediction results
 import numpy as np
 import pandas as pd
 from pathlib import Path
-import re
+import re, os
 from PIL import Image
 from breastcancer.visualization import Shape, add_mark
+from sklearn.cluster import DBSCAN
 
 GROUND_TRUTH_FILE_ID_RE = "\d+/\d+"
 
@@ -113,9 +114,86 @@ def get_locations_from_csv(file, hasHeader=False):
     data = pd.read_csv(file)
   else:
     data = pd.read_csv(file, header=None)
-
-  locations = [(x[0], x[1]) for x in data.values.tolist()]
+  locations = [(int(x[0]), int(x[1])) for x in data.values.tolist()]
   return locations
+
+def get_data_from_csv(file, hasHeader=False):
+  """ get the data from CSV file.
+
+  Args:
+    file: csv file, of which the first and second columns store the
+      point coordinates.
+    hasHeader: bool value to tell if the input csv file has a header or
+      not.
+
+  Return:
+    a list of rows.
+  """
+  if hasHeader:
+    data = pd.read_csv(file)
+  else:
+    data = pd.read_csv(file, header=None)
+
+  return data.values.tolist()
+
+def dbscan_clustering(input_coordinates, eps, min_samples):
+  """ cluster the prediction results by dbscan. It could avoid the
+  duplicated predictions caused by the small stride.
+
+  Args:
+    input_coordinates: the prediction coordinates, e.g. [(r0, c0), (r1,
+     c1), (r2, c2), ...].
+    eps: maximum distance between two samples for them to be considered
+     as in the same neighborhood.
+    min_samples: number of samples (or total weight) in a neighborhood
+     for a point to be considered as a core point.
+
+  Return:
+    a list of average coordinates for each cluster
+  """
+  db = DBSCAN(eps=eps, min_samples=min_samples).fit(input_coordinates)
+  labels = db.labels_
+  unique_labels = set(labels)
+  clustered_points = [[[],[]] for _ in unique_labels] # store the coordinates for each cluster
+
+  # collect the coordinates for each cluster
+  for i in range(0, len(input_coordinates)):
+    label = labels[i]
+    r, c = input_coordinates[i]
+    clustered_points[label][0].append(r)
+    clustered_points[label][1].append(c)
+
+  # average the coordinates for each cluster
+  return [(np.mean(rows).astype(np.int), np.mean(cols).astype(np.int))
+          for rows, cols in clustered_points]
+
+def cluster_prediction_result(pred_dir, eps, min_samples=1):
+  """ cluster the prediction results to avoid the duplicated
+  predictions introduced by the small stride.
+
+  Args:
+    pred_dir: directory for the prediction result
+    eps: maximum distance between two samples for them to be considered
+     as in the same neighborhood.
+    min_samples: number of samples (or total weight) in a neighborhood
+     for a point to be considered as a core point.
+  """
+
+  pred_files = list_files(pred_dir, "*.csv")
+  pred_files = get_file_id(pred_files, GROUND_TRUTH_FILE_ID_RE)
+  for k, pred_file in pred_files.items():
+    pred_locations = get_locations_from_csv(pred_file, hasHeader=True)
+
+    # apply dbscan clustering on each prediction file
+    clustered_pred_locations = dbscan_clustering(pred_locations, eps=eps, min_samples=min_samples)
+
+    # save the prediction results
+    clustered_file_name = pred_file.replace(k, f"clustered_{k}")
+    df = pd.DataFrame(clustered_pred_locations, columns=['row', 'col'])
+    dir = os.path.dirname(clustered_file_name)
+    os.makedirs(dir, exist_ok=True)
+    df.to_csv(clustered_file_name, index=False)
+
 
 def evaluate(pred_dir, ground_true_dir, threshold=30):
   """ Evaluate the prediction result based on the ground truth data
@@ -159,7 +237,8 @@ def evaluate(pred_dir, ground_true_dir, threshold=30):
 
   return (f1_list, over_detected, non_detected)
 
-def add_ground_truth_mark_help(im_path, ground_truth_file_path, hasHeader=False, shape=Shape.CROSS):
+def add_ground_truth_mark_help(im_path, ground_truth_file_path, hasHeader=False,
+                               shape=Shape.CROSS, mark_color=(0, 255, 127, 200)):
   """ add the mark for each point in the ground truth data.
 
   Args:
@@ -168,14 +247,16 @@ def add_ground_truth_mark_help(im_path, ground_truth_file_path, hasHeader=False,
     hasHeader: bool value to tell if the ground truth csv file has a header.
     shape: options for mark shape. It could be Shape.CROSS, Shape.SQUARE,
       or Shape.CIRCLE.
+    mark_color: mark color, the default value is (0, 255, 127, 200)
   """
   im = Image.open(im_path)
   locations = get_locations_from_csv(ground_truth_file_path, hasHeader=hasHeader)
-  add_mark(im, locations, shape)
+  add_mark(im, locations, shape, mark_color=mark_color)
   im.save(im_path)
 
 def add_ground_truth_mark(sparkContext, partition_num, im_dir, im_suffix, ground_truth_dir,
-                          ground_truth_file_suffix, shape=Shape.CROSS, hasHeader=False):
+                          ground_truth_file_suffix, shape=Shape.CROSS,
+                          mark_color=(0, 255, 127, 200), hasHeader=False):
   """ Add the ground truth data as marks into the images in parallel.
 
     Args:
@@ -207,7 +288,8 @@ def add_ground_truth_mark(sparkContext, partition_num, im_dir, im_suffix, ground
 
   # parallel the input images, and add the marks to each image
   rdd = sparkContext.parallelize(img_ground_truth, partition_num)
-  rdd.foreach(lambda t: add_ground_truth_mark_help(t[0], t[1], hasHeader=hasHeader, shape=shape))
+  rdd.foreach(lambda t: add_ground_truth_mark_help(t[0], t[1], hasHeader=hasHeader, shape=shape,
+                                                   mark_color=mark_color))
 
 
 def test_compute_f1():
@@ -397,3 +479,4 @@ def test_img_quality():
   os.remove(jpg_hq_file)
   os.remove(jpg_lq_file)
   os.remove(png_file)
+

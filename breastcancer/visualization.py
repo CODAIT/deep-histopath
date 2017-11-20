@@ -93,7 +93,7 @@ def draw_circle(draw, center_location, color, radius=32, width=5):
     c1 = c + (radius + i)
     draw.ellipse([(c0, r0), (c1, r1)], fill=None, outline=color)
 
-def add_mark(im, locations, shape=Shape.SQUARE):
+def add_mark(im, locations, shape=Shape.SQUARE, mark_color=(0, 255, 127, 200)):
   """
   add the mark for each point of the input locations into the image
 
@@ -103,10 +103,10 @@ def add_mark(im, locations, shape=Shape.SQUARE):
       (r1, c1), (r2, c2), ...]
     shape: mark shape, it could be Shape.CROSS, Shape.SQUARE,
       Shape.CIRCLE
+    mark_color: mark color, default value is (0, 255, 127, 200)
   """
   radius = 32
   width = 8
-  mark_color = (0, 255, 127, 200)
 
   draw = ImageDraw.Draw(im, 'RGBA')
   for r, c in locations:
