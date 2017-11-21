@@ -30,45 +30,62 @@ def flat_result_2_row(predictions):
 def main(args=None):
   # parse args
   parser = argparse.ArgumentParser()
-  parser.add_argument("--appName", default="Breast Cancer -- Predict", help="application name")
+  parser.add_argument("--appName", default="Breast Cancer -- Predict",
+                      help="application name (default: %(default)s)")
   parser.add_argument("--slide_path", default=os.path.join("data", "training_image_data"),
-                      help="path to the mitosis data for prediction")
+                      help="path to the mitosis data for prediction (default: %(default)s)")
   parser.add_argument("--model_path", default=os.path.join("model",
                                                            "0.95114_acc_0.58515_loss_530_epoch_model.hdf5"),
-                      help="path to the model file")
-  parser.add_argument("--model_name", default="vgg", help="input model type, e.g. vgg, resnet")
-  parser.add_argument("--file_suffix", default=".svs",
-                      help="file suffix for the input data set, e.g. *.svs")
+                      help="path to the model file (default: %(default)s)")
+  parser.add_argument("--model_name", default="vgg",
+                      help="input model type, e.g. vgg, resnet (default: %(default)s)")
+  parser.add_argument("--file_suffix", default="*.svs",
+                      help="file suffix for the input data set, e.g. *.svs (default: %(default)s)")
   parser.add_argument("--node_number", type=int, default=2,
-                      help="number of available computing node in the spark cluster")
+                      help="number of available computing node in the spark cluster "\
+                           "(default: %(default)s)")
   parser.add_argument("--gpu_per_node", type=int, default=4,
-                      help="number of GPUs on each computing node")
+                      help="number of GPUs on each computing node (default: %(default)s)")
   parser.add_argument("--cpu_per_node", type=int, default=4,
-                      help="number of CPUs on each computing node")
-  parser.add_argument("--ROI_size", type=int, default=6000, help="size of ROI")
-  parser.add_argument("--ROI_overlap", type=int, default=0, help="overlap between ROIs")
-  parser.add_argument("--ROI_channel", type=int, default=3, help="number of ROI channel")
+                      help="number of CPUs on each computing node (default: %(default)s)")
+  parser.add_argument("--ROI_size", type=int, default=6000,
+                      help="size of ROI (default: %(default)s)")
+  parser.add_argument("--ROI_overlap", type=int, default=0,
+                      help="overlap between ROIs (default: %(default)s)")
+  parser.add_argument("--ROI_channel", type=int, default=3,
+                      help="number of ROI channel (default: %(default)s)")
   parser.add_argument("--skipROI", default=False, dest='skipROI', action='store_true',
-                      help="skip the ROI layer")
-  parser.add_argument("--tile_size", type=int, default=64, help="size of tile")
-  parser.add_argument("--tile_overlap", type=int, default=0, help="overlap between tiles")
-  parser.add_argument("--tile_channel", type=int, default=3, help="channel of tile")
+                      help="skip the ROI layer (default: %(default)s)")
+  parser.add_argument("--tile_size", type=int, default=64,
+                      help="size of tile (default: %(default)s)")
+  parser.add_argument("--tile_overlap", type=int, default=0,
+                      help="overlap between tiles (default: %(default)s)")
+  parser.add_argument("--tile_channel", type=int, default=3,
+                      help="channel of tile (default: %(default)s)")
   parser.add_argument("--mitosis_threshold", type=float, default=0.5,
-                      help="the threshold for the identification of mitosis")
+                      help="the threshold for the identification of mitosis (default: %(default)s)")
   parser.add_argument("--batch_size", type=int, default=128,
-                      help="batch size for the mitosis prediction")
+                      help="batch size for the mitosis prediction (default: %(default)s)")
+  parser.add_argument("--marginalize", default=False, action="store_true",
+                      help="use noise marginalization when evaluating the validation set. if this "\
+                           "is set, then the `batch_size` must be divisible by 4, or equal to 1 "\
+                           "for a special debugging case of no augmentation (default: %(default)s)")
   parser.add_argument("--onGPU", dest='isGPU', action='store_true',
-                      help="run the script on GPU")
-  parser.add_argument("--onCPU", dest='isGPU', action='store_false', help="run the script on CPU")
+                      help="run the script on GPU (default: False)")
+  parser.add_argument("--onCPU", dest='isGPU', action='store_false',
+                      help="run the script on CPU (default: True)")
   parser.set_defaults(isGPU=False)
   parser.add_argument("--save_mitosis_locations", default=False, dest="save_mitosis_locations",
                       action='store_true',
-                      help="save the locations of the detected mitoses to csv")
+                      help="save the locations of the detected mitoses to csv "\
+                           "(default: %(default)s)")
   parser.add_argument("--save_mask", default=False, dest="save_mask", action='store_true',
-                      help="save the locations of the detected mitoses as a mask image ")
-  parser.add_argument("--pred_save_path", required=True, help="file path to save the prediction results")
+                      help="save the locations of the detected mitoses as a mask image "\
+                           "(default: %(default)s)")
+  parser.add_argument("--pred_save_path", required=True,
+                      help="file path to save the prediction results")
   parser.add_argument("--debug", default=False, dest='isDebug', action='store_true',
-                      help="print the debug information")
+                      help="print the debug information (default: %(default)s)")
 
   args = parser.parse_args()
   if args.isGPU:
@@ -103,6 +120,7 @@ def main(args=None):
                                        tile_channel=args.tile_channel,
                                        threshold=args.mitosis_threshold, isGPU=args.isGPU,
                                        batch_size=args.batch_size,
+                                       marginalization=args.marginalize,
                                        save_mitosis_locations=args.save_mitosis_locations,
                                        save_mask=args.save_mask, isDebug=args.isDebug)
 

@@ -119,8 +119,8 @@ def pad_tile_on_edge(tile, tile_row, tile_col, tile_size, ROI):
   return np.pad(tile, padding, "reflect")
 
 
-def predict_mitoses_num_locations(model, model_name, threshold, ROI,
-                                  tile_size=64, tile_overlap=0, tile_channel=3, batch_size=128):
+def predict_mitoses_num_locations(model, model_name, threshold, ROI, tile_size=64, tile_overlap=0,
+                                  tile_channel=3, batch_size=128, marginalization=False):
   """ Predict the number of mitoses with the detected mitosis locations
     for each input ROI.
 
@@ -137,37 +137,62 @@ def predict_mitoses_num_locations(model, model_name, threshold, ROI,
     ROI_col: col number of the ROI in the input slide image. If setting
       it 0, the original coordination will be the left-upper corner of
       the input ROI.
-    tile_size: tile siz.
+    tile_size: tile size.
     tile_overlap: overlap between tiles.
     tile_channel: channel of tiles.
     batch_size: the batch_size for prediction.
+    marginalization: Boolean for whether or not to use noise
+      marginalization when making predictions.  If True, then
+      each image will be expanded to a batch of size `batch_size` of
+      augmented versions of that image, and predicted probabilities for
+      each batch will be averaged to yield a single noise-marginalized
+      prediction for each image.  Note: if this is True, then
+      `batch_size` must be divisible by 4, or equal to 1 for a special
+      debugging case of no augmentation.
 
   Return:
      the prediction result for the input ROI, (mitosis_num,
      mitosis_location_scores).
   """
+  # lazy importing to avoid eager gpu utilization
   from preprocess_mitoses import gen_dense_coords, extract_patch, gen_patches
+  from train_mitoses import create_augmented_batch, marginalize, normalize
+  import keras.backend as K
+
   ROI_height, ROI_width, ROI_channel = ROI.shape
 
   # gen_dense_coords function will handle the cases that the tile center point is outside of the ROI
   tile_indices = list(gen_dense_coords(ROI_height, ROI_width, tile_size, tile_size - tile_overlap))
-  #tiles = [extract_patch(ROI, row, col, tile_size) for row, col in tile_indices]
-  tiles = [element[0] for element in gen_patches(ROI, tile_indices, tile_size, rotations=0,
-                                                      translations=0, max_shift=0, p=1)]
-  tiles = np.stack(tiles, axis=0)
+  #tiles = (extract_patch(ROI, row, col, tile_size) for row, col in tile_indices)
+  tiles = (element[0] for element in gen_patches(ROI, tile_indices, tile_size, rotations=0,
+      translations=0, max_shift=0, p=1))
 
-  # normalize the tiles. Note that if the model is vgg or resnet, the
-  # channel order is changed in the normalization
-  from train_mitoses import normalize
-  tiles = normalize((tiles / 255).astype(dtype=np.float32), model_name)
-  prediction = model.predict(tiles, batch_size)
+  if marginalization:
+    predictions = []
+    sess = K.get_session()
+    for tile in tiles:
+      # NOTE: averaging over sigmoid outputs vs. logits may yield slightly different results, due
+      # to numerical precision
+      norm_tile = normalize((tiles / 255).astype(np.float32), model_name)  # normalize tile
+      aug_tiles = create_augmented_batch(norm_tile, batch_size)  # create batch of aug versions
+      aug_preds = model(aug_tiles)  # make predictions on augmented batch
+      pred = marginalize(aug_preds)  # average predictions
+      pred_np = sess.run(pred, feed_dict={K.learning_phase(): 0})  # actually run graph
+      predictions.append(pred_np)
+  else:
+    # TODO: batch this up to avoid OOM
+    tiles = np.stack(list(tiles), axis=0)
+    # normalize the tiles. Note that if the model is vgg or resnet, the
+    # channel order is changed in the normalization
+    tiles = normalize((tiles / 255).astype(np.float32), model_name)
+    predictions = model.predict(tiles, batch_size)
 
-  isMitoses = prediction > threshold
+  isMitoses = predictions > threshold
   mitosis_location_scores = []
   for i in range(len(isMitoses)):
     if isMitoses[i]:
       tile_row_index, tile_col_index = tile_indices[i]
-      mitosis_location_scores.append((tile_row_index, tile_col_index, np.asscalar(prediction[i])))
+      mitosis_location_scores.append((tile_row_index, tile_col_index, np.asscalar(predictions[i])))
 
   mitosis_num = len(mitosis_location_scores)
   return (mitosis_num, mitosis_location_scores)
@@ -176,10 +201,8 @@ def predict_mitoses_num_locations(model, model_name, threshold, ROI,
 def predict_mitoses_help(model_file, model_name, index, file_partition,
                          ROI_size, ROI_overlap, ROI_channel=3, skipROI=False,
                          tile_size=64, tile_overlap=0, tile_channel=3,
-                         threshold=0.5, isGPU=True, batch_size=128,
-                         save_mitosis_locations=False,
-                         save_mask=False,
-                         isDebug=False):
+                         threshold=0.5, isGPU=True, batch_size=128, marginalization=False,
+                         save_mitosis_locations=False, save_mask=False, isDebug=False):
   """ Predict the number of mitoses for each input slide image.
 
   Args:
@@ -199,6 +222,14 @@ def predict_mitoses_help(model_file, model_name, index, file_partition,
     isGPU: true if running on tensorflow-GPU; false if running on
       tensorflow-CPU.
     batch_size: the batch_size for prediction.
+    marginalization: Boolean for whether or not to use noise
+      marginalization when making predictions.  If True, then
+      each image will be expanded to a batch of size `batch_size` of
+      augmented versions of that image, and predicted probabilities for
+      each batch will be averaged to yield a single noise-marginalized
+      prediction for each image.  Note: if this is True, then
+      `batch_size` must be divisible by 4, or equal to 1 for a special
+      debugging case of no augmentation.
     save_mitosis_locations: bool value to determine if save the detected
       mitosis locations into csv file.
     save_mask: bool value to determine if saving the mask as an image.
@@ -226,7 +257,7 @@ def predict_mitoses_help(model_file, model_name, index, file_partition,
   from preprocess_mitoses import create_mask
 
   # load the model and add the sigmoid layer
-  base_model = load_model(model_file)
+  base_model = load_model(model_file, compile=False)
   probs = keras.layers.Activation('sigmoid')(base_model.output)
   model = keras.models.Model(inputs=base_model.input, outputs=probs)
 
@@ -260,8 +291,10 @@ def predict_mitoses_help(model_file, model_name, index, file_partition,
       mitosis_num, mitosis_location_scores  = predict_mitoses_num_locations(model=model,
                                                     model_name=model_name, threshold=threshold,
                                                     ROI=ROI, tile_size=tile_size,
-                                                    tile_overlap=tile_overlap, tile_channel=tile_channel,
-                                                    batch_size=batch_size)
+                                                    tile_overlap=tile_overlap,
+                                                    tile_channel=tile_channel,
+                                                    batch_size=batch_size,
+                                                    marginalization=marginalization)
 
       mitosis_location_score_list += mitosis_location_scores
       result.append((slide_id, f"ROI_{row}_{col}", mitosis_num, mitosis_location_scores))
@@ -312,9 +345,10 @@ def predict_mitoses_help(model_file, model_name, index, file_partition,
   return result
 
 def predict_mitoses(sparkContext, model_path, model_name, input_dir, file_suffix, partition_num,
-                    ROI_size, ROI_overlap, ROI_channel=3, skipROI=False, tile_size=64, tile_overlap=0,
-                    tile_channel=3, threshold=0.5, isGPU=True, batch_size=128,
-                    save_mitosis_locations=False, save_mask=False, isDebug=False):
+                    ROI_size, ROI_overlap, ROI_channel=3, skipROI=False, tile_size=64,
+                    tile_overlap=0, tile_channel=3, threshold=0.5, isGPU=True, batch_size=128,
+                    marginalization=False, save_mitosis_locations=False, save_mask=False,
+                    isDebug=False):
     """ Predict the number of mitoses for the input slide images. It
       supports both GPUs and CPUs.
 
@@ -338,6 +372,14 @@ def predict_mitoses(sparkContext, model_path, model_name, input_dir, file_suffix
       isGPU: true if running on tensorflow-GPU; false if running on
         tensorflow-CPU
       batch_size: the batch_size for prediction.
+      marginalization: Boolean for whether or not to use noise
+        marginalization when making predictions.  If True, then
+        each image will be expanded to a batch of size `batch_size` of
+        augmented versions of that image, and predicted probabilities for
+        each batch will be averaged to yield a single noise-marginalized
+        prediction for each image.  Note: if this is True, then
+        `batch_size` must be divisible by 4, or equal to 1 for a special
+        debugging case of no augmentation.
       save_mitosis_locations: bool value to determine if save the
         detected mitosis locations into csv file.
       save_mask: bool value to determine if saving the mask as an image.
@@ -357,6 +399,7 @@ def predict_mitoses(sparkContext, model_path, model_name, input_dir, file_suffix
                                               tile_size=tile_size, tile_overlap=tile_overlap,
                                               tile_channel=tile_channel, threshold=threshold,
                                               batch_size=batch_size,
+                                              marginalization=marginalization,
                                               save_mitosis_locations=save_mitosis_locations,
                                               save_mask=save_mask, isDebug=isDebug)
     else:
@@ -369,15 +412,17 @@ def predict_mitoses(sparkContext, model_path, model_name, input_dir, file_suffix
                                               tile_size=tile_size, tile_overlap=tile_overlap,
                                               tile_channel=tile_channel, threshold=threshold,
                                               batch_size=batch_size,
+                                              marginalization=marginalization,
                                               save_mitosis_locations=save_mitosis_locations,
                                               save_mask=save_mask, isDebug=isDebug)
     return predictions_rdd
 
 
 def predict_mitoses_gpu(sparkContext, model_path, model_name, input_dir, file_suffix, partition_num,
-                    ROI_size, ROI_overlap, ROI_channel=3, skipROI=False, tile_size=64, tile_overlap=0,
-                    tile_channel=3, threshold=0.5, batch_size=128,
-                    save_mitosis_locations=False, save_mask=False, isDebug=False):
+                    ROI_size, ROI_overlap, ROI_channel=3, skipROI=False, tile_size=64,
+                    tile_overlap=0, tile_channel=3, threshold=0.5, batch_size=128,
+                    marginalization=False, save_mitosis_locations=False, save_mask=False,
+                    isDebug=False):
   """ Predict the number of mitoses for the input slide images using GPU.
 
     Args:
@@ -398,6 +443,14 @@ def predict_mitoses_gpu(sparkContext, model_path, model_name, input_dir, file_su
       tile_channel: channel of tiles.
       threshold: threshold for the output of last sigmoid layer.
       batch_size: the batch_size for prediction.
+      marginalization: Boolean for whether or not to use noise
+        marginalization when making predictions.  If True, then
+        each image will be expanded to a batch of size `batch_size` of
+        augmented versions of that image, and predicted probabilities for
+        each batch will be averaged to yield a single noise-marginalized
+        prediction for each image.  Note: if this is True, then
+        `batch_size` must be divisible by 4, or equal to 1 for a special
+        debugging case of no augmentation.
       save_mitosis_locations: bool value to determine if save the
         detected mitosis locations into csv file.
       save_mask: bool value to determine if saving the mask as an image.
@@ -447,15 +500,17 @@ def predict_mitoses_gpu(sparkContext, model_path, model_name, input_dir, file_su
                                          tile_size=tile_size, tile_overlap=tile_overlap,
                                          tile_channel=tile_channel, threshold=threshold,
                                          isGPU=True, batch_size=batch_size,
+                                         marginalization=marginalization,
                                          save_mitosis_locations=save_mitosis_locations,
                                          save_mask=save_mask, isDebug=isDebug))
 
   return predictions_rdd
 
 def predict_mitoses_cpu(sparkContext, model_path, model_name, input_dir, file_suffix, partition_num,
-                    ROI_size, ROI_overlap, ROI_channel=3, skipROI=False, tile_size=64, tile_overlap=0,
-                    tile_channel=3, threshold=0.5, batch_size=128,
-                        save_mitosis_locations=False, save_mask=False,isDebug=False):
+                        ROI_size, ROI_overlap, ROI_channel=3, skipROI=False, tile_size=64,
+                        tile_overlap=0, tile_channel=3, threshold=0.5, batch_size=128,
+                        marginalization=False, save_mitosis_locations=False, save_mask=False,
+                        isDebug=False):
   """ Predict the number of mitoses for the input slide images using CPU.
 
     Args:
@@ -476,6 +531,14 @@ def predict_mitoses_cpu(sparkContext, model_path, model_name, input_dir, file_su
       tile_channel: channel of tiles.
       threshold: threshold for the output of last sigmoid layer.
       batch_size: the batch_size for prediction.
+      marginalization: Boolean for whether or not to use noise
+        marginalization when making predictions.  If True, then
+        each image will be expanded to a batch of size `batch_size` of
+        augmented versions of that image, and predicted probabilities for
+        each batch will be averaged to yield a single noise-marginalized
+        prediction for each image.  Note: if this is True, then
+        `batch_size` must be divisible by 4, or equal to 1 for a special
+        debugging case of no augmentation.
       save_mitosis_locations: bool value to determine if save the
         detected mitosis locations into csv file.
       save_mask: bool value to determine if saving the mask as an image.
@@ -501,6 +564,7 @@ def predict_mitoses_cpu(sparkContext, model_path, model_name, input_dir, file_su
                                                     tile_channel=tile_channel,
                                                     threshold=threshold, isGPU=False,
                                                     batch_size=batch_size,
+                                                    marginalization=marginalization,
                                                     save_mitosis_locations=save_mitosis_locations,
                                                     save_mask=save_mask, isDebug=isDebug))
   return predictions_rdd
