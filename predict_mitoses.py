@@ -17,13 +17,11 @@ def flat_result_2_row(predictions):
   Return:
     a list of tuples(slide_id, ROI, mitosis_num, r, c, score)
   """
-
+  assert predictions is not None
   result = []
-  if predictions:
-    for pred in predictions:
-      slide_id, ROI, mitosis_num, mitosis_location_scores = pred
-      for r, c, score in mitosis_location_scores:
-        result.append((slide_id, ROI, mitosis_num, r, c, score))
+  slide_id, ROI, mitosis_num, mitosis_location_scores = predictions
+  for r, c, score in mitosis_location_scores:
+    result.append((slide_id, ROI, mitosis_num, r, c, score))
   return result
 
 
@@ -122,12 +120,18 @@ def main(args=None):
                                        batch_size=args.batch_size,
                                        marginalization=args.marginalize,
                                        save_mitosis_locations=args.save_mitosis_locations,
-                                       save_mask=args.save_mask, isDebug=args.isDebug)
+                                       save_mask=args.save_mask, isDebug=args.isDebug).cache()
 
-  pred_rows = predict_result_rdd.flatMap(lambda t: flat_result_2_row(t)).cache()
+
+  pred_rows = predict_result_rdd.filter(lambda t: t is not None)\
+                                .flatMap(lambda t: flat_result_2_row(t))\
+                                .cache()
 
   df = spark.createDataFrame(pred_rows, ['slide_id', 'ROI_id', 'mitosis_num_per_ROI', 'row_num',
                                          'col_num', 'score'])
+
+  dir = os.path.dirname(args.pred_save_path)
+  os.makedirs(dir, exist_ok=True)
   df.toPandas().to_csv(args.pred_save_path, header=True)
   df.show()
 

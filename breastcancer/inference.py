@@ -118,6 +118,25 @@ def pad_tile_on_edge(tile, tile_row, tile_col, tile_size, ROI):
   padding = ((0, tile_size - tile_height), (0, tile_size - tile_width), (0, 0))
   return np.pad(tile, padding, "reflect")
 
+def gen_batches(iterator, batch_size, include_partial=True):
+  """ generate the tile batches from the tile iterator
+  Args:
+    iterator: the tile iterator
+    batch_size: batch size
+    include_partial: boolean value to keep the partial batch or not
+
+  Return:
+    the iterator for the tile batches
+  """
+  batch = []
+  for item in iterator:
+    batch.append(item)
+    if len(batch) == batch_size:
+      yield batch
+      batch = []
+  if len(batch) > 0 and include_partial:
+    yield batch
+
 
 def predict_mitoses_num_locations(model, model_name, threshold, ROI, tile_size=64, tile_overlap=0,
                                   tile_channel=3, batch_size=128, marginalization=False):
@@ -163,36 +182,38 @@ def predict_mitoses_num_locations(model, model_name, threshold, ROI, tile_size=6
 
   # gen_dense_coords function will handle the cases that the tile center point is outside of the ROI
   tile_indices = list(gen_dense_coords(ROI_height, ROI_width, tile_size, tile_size - tile_overlap))
+
   #tiles = (extract_patch(ROI, row, col, tile_size) for row, col in tile_indices)
   tiles = (element[0] for element in gen_patches(ROI, tile_indices, tile_size, rotations=0,
       translations=0, max_shift=0, p=1))
+  mitosis_location_scores = []
+  predictions = np.empty((0, 1))
 
   if marginalization:
-    predictions = []
     sess = K.get_session()
     for tile in tiles:
       # NOTE: averaging over sigmoid outputs vs. logits may yield slightly different results, due
       # to numerical precision
-      norm_tile = normalize((tiles / 255).astype(np.float32), model_name)  # normalize tile
+      norm_tile = normalize((tile / 255).astype(np.float32), model_name)  # normalize tile
       aug_tiles = create_augmented_batch(norm_tile, batch_size)  # create batch of aug versions
       aug_preds = model(aug_tiles)  # make predictions on augmented batch
       pred = marginalize(aug_preds)  # average predictions
       pred_np = sess.run(pred, feed_dict={K.learning_phase(): 0})  # actually run graph
-      predictions.append(pred_np)
+      predictions = np.concatenate((predictions, pred_np), axis=0)
   else:
-    # TODO: batch this up to avoid OOM
-    tiles = np.stack(list(tiles), axis=0)
-    # normalize the tiles. Note that if the model is vgg or resnet, the
-    # channel order is changed in the normalization
-    tiles = normalize((tiles / 255).astype(np.float32), model_name)
-    predictions = model.predict(tiles, batch_size)
+    tile_batches = gen_batches(tiles, batch_size, include_partial=True)
+    for tile_batch in tile_batches:
+      tile_stack = np.stack(tile_batch, axis=0)
+      tile_stack = normalize((tile_stack / 255).astype(dtype=np.float32), model_name)
+      pred_np = model.predict(tile_stack, batch_size)
+      predictions = np.concatenate((predictions, pred_np), axis=0)
 
   isMitoses = predictions > threshold
-  mitosis_location_scores = []
-  for i in range(len(isMitoses)):
+  for i in range(isMitoses.shape[0]):
     if isMitoses[i]:
       tile_row_index, tile_col_index = tile_indices[i]
-      mitosis_location_scores.append((tile_row_index, tile_col_index, np.asscalar(predictions[i])))
+      mitosis_location_scores.append((tile_row_index, tile_col_index,
+                                      np.asscalar(predictions[i])))
 
   mitosis_num = len(mitosis_location_scores)
   return (mitosis_num, mitosis_location_scores)
@@ -493,8 +514,8 @@ def predict_mitoses_gpu(sparkContext, model_path, model_name, input_dir, file_su
 
   # assign GPU id to each partition, and then run the predict function for each partition.
   predictions_rdd = slide_rdd.mapPartitionsWithIndex(lambda index, p: [(split_index_2_gpu_id[index], p)])\
-    .map(lambda t : predict_mitoses_help(model_file=model_path, model_name = model_name, index=t[0],
-                                         file_partition=t[1], ROI_size=ROI_size,
+    .flatMap(lambda t : predict_mitoses_help(model_file=model_path, model_name = model_name,
+                                          index=t[0], file_partition=t[1], ROI_size=ROI_size,
                                          ROI_overlap=ROI_overlap, ROI_channel=ROI_channel,
                                          skipROI=skipROI,
                                          tile_size=tile_size, tile_overlap=tile_overlap,
@@ -568,4 +589,3 @@ def predict_mitoses_cpu(sparkContext, model_path, model_name, input_dir, file_su
                                                     save_mitosis_locations=save_mitosis_locations,
                                                     save_mask=save_mask, isDebug=isDebug))
   return predictions_rdd
-
