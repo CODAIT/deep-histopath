@@ -789,6 +789,7 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     saver.restore(sess, checkpoint_filename)
     with open(global_step_epoch_filename, "rb") as f:
       global_step, global_epoch = pickle.load(f)
+      global_epoch += 1  # start next epoch
 
   # TODO: extract this into a function with tests
   # new classifier layers + fine-tuning combined training loop
