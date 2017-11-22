@@ -11,18 +11,18 @@ from sklearn.cluster import DBSCAN
 
 GROUND_TRUTH_FILE_ID_RE = "\d+/\d+"
 
-def compute_f1(predict, ground_truth, threshold=30):
-  """ Compute the F1 score, the calculation equation can be found at
-  http://amida13.isi.uu.nl/?q=node/4.
+def prepare_f1_inputs(prediction, ground_truth, threshold=30):
+  """ Prepare the input variables (TP, FP, and PN) for computing F1
+  score.
 
-  The implementation idea is to compute TP, FP, and FN first, and then
-  get F1 score. TP: its Eucledian distance to a ground truth location
-  is less than threshold; FP: not within the threshold distance of a
-  ground truth location; FN: all ground truth locations that do not
-  have a detection within the threshold.
+  TP: its Eucledian distance to a ground truth location is less than
+    threshold;
+  FP: not within the threshold distance of a ground truth location;
+  FN: all ground truth locations that do not have a detection within
+    the threshold.
 
   Args:
-    predict: prediction result, a list of point locations, e.g.
+    prediction: prediction result, a list of point locations, e.g.
       [(r0, c0), (r1, c1), (r2, c2), ...].
     ground_truth: groud truth data, a list of point locations, e.g.
       [(r0, c0), (r1, c1), (r2, c2), ...].
@@ -30,42 +30,72 @@ def compute_f1(predict, ground_truth, threshold=30):
       points are at the same circle.
 
   Return:
+    A tuple of (FP, TP, FN).
+  """
+  if len(prediction) == 0 and len(ground_truth) != 0:
+    FP = []
+    TP = []
+    FN = ground_truth
+  elif len(prediction) != 0 and len(ground_truth) == 0:
+    FP = prediction
+    TP = []
+    FN = []
+  elif len(prediction) != 0 and len(ground_truth) != 0:
+    # initialize the values.
+    FP = prediction.copy()
+    TP = []
+    FN = []
+    # check which points in the ground truth are located with each other
+    # less than `threshold`.
+    for gt_r, gt_c in ground_truth:
+      for r, c in ground_truth:
+        dist = np.sqrt((gt_r - r) ** 2 + (gt_c - c) ** 2)
+        if dist > 0 and dist < threshold * 2:
+          print(f"Point ({r} , {c}) has multiple points in the circle")
+
+    for gt_r, gt_c in ground_truth:
+      # if several points fall within a single ground truth location,
+      # they will be counted as one true positive. Here we use a list
+      # to collect this kind of points for each ground truth point.
+      tp = []
+      for pred_r, pred_c in prediction:
+        dist = np.sqrt((gt_r - pred_r) ** 2 + (gt_c - pred_c) ** 2)
+        if dist <= threshold:
+          tp.append((pred_r, pred_c))
+          # remove the TP point from the FP list
+          if (pred_r, pred_c) in FP:
+            FP.remove((pred_r, pred_c))
+      if len(tp) == 0:
+        # if no points fall within this ground truth point, the ground
+        # truth point will be treated as FN.
+        FN.append((gt_r, gt_c))
+      else:
+        # the reason of using .append() here instead of += is to count
+        # several points falling in a single ground truth location as
+        # one true positive
+        TP.append(tp)
+  else:
+    FP = []
+    TP = []
+    FN = []
+
+  return (FP, TP, FN)
+
+def compute_f1(FP, TP, FN):
+  """ Compute the F1 score. The calculation equation can be found at
+  http://amida13.isi.uu.nl/?q=node/4.
+
+  Args:
+    FP: a list of false positive predictions.
+    TP: a list of true positive predictions.
+    FN: a list of false negative predictions.
+
+  Return:
     F1 score.
   """
-  # initialize the values.
-  FP = predict.copy()
-  TP = []
-  FN = []
 
-  # check which points in the ground truth are located with each other
-  # less than `threshold`.
-  for gt_r, gt_c in ground_truth:
-    for r, c in ground_truth:
-      dist = np.sqrt((gt_r - r) ** 2 + (gt_c - c) ** 2)
-      if dist > 0 and dist < threshold * 2:
-        print(f"Point ({r} , {c}) has multiple points in the circle")
-
-  for gt_r, gt_c in ground_truth:
-    # if several points fall within a single ground truth location,
-    # they will be counted as one true positive. Here we use a list
-    # to collect this kind of points for each ground truth point.
-    tp = []
-    for pred_r, pred_c in predict:
-      dist = np.sqrt((gt_r - pred_r)**2 + (gt_c - pred_c)**2)
-      if dist <= threshold:
-        tp.append((pred_r, pred_c))
-        # remove the TP point from the FP list
-        if (pred_r, pred_c) in FP:
-          FP.remove((pred_r, pred_c))
-    if len(tp) == 0:
-      # if no points fall within this ground truth point, the ground
-      # truth point will be treated as FN.
-      FN.append((gt_r, gt_c))
-    else:
-      TP.append(tp)
-
-  precision = len(TP) / (len(TP) + len(FP))
-  recall = len(TP) / (len(TP) + len(FN))
+  precision = len(TP) / (len(TP) + len(FP)) if len(TP) + len(FP) > 0 else 0
+  recall = len(TP) / (len(TP) + len(FN)) if len(TP) + len(FN) > 0 else 0
   f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
   return f1
 
@@ -110,12 +140,17 @@ def get_locations_from_csv(file, hasHeader=False):
   Return:
     a list of point locations, e.g. [(r0, c0), (r1, c1), ......].
   """
+  # handle the case that the input file does not exist
+  if file is None:
+    return []
+
   if hasHeader:
     data = pd.read_csv(file)
   else:
     data = pd.read_csv(file, header=None)
   locations = [(int(x[0]), int(x[1])) for x in data.values.tolist()]
   return locations
+
 
 def get_data_from_csv(file, hasHeader=False):
   """ get the data from CSV file.
@@ -195,9 +230,10 @@ def cluster_prediction_result(pred_dir, eps, min_samples=1):
     df.to_csv(clustered_file_name, index=False)
 
 
-def evaluate(pred_dir, ground_true_dir, threshold=30):
+
+def evaluate_f1(pred_dir, ground_true_dir, threshold=30):
   """ Evaluate the prediction result based on the ground truth data
-    using F1 score.
+    using F1 score. It will compute F1 score for each input file.
 
   Args:
     pred_dir: directory for the prediction csv files.
@@ -216,26 +252,85 @@ def evaluate(pred_dir, ground_true_dir, threshold=30):
   ground_true_files = list_files(ground_true_dir, "*.csv")
   ground_true_files = get_file_id(ground_true_files, GROUND_TRUTH_FILE_ID_RE)
 
+  union_file_keys = set(pred_files.keys())
+  union_file_keys.add(set(ground_true_files.keys()))
+
   f1_list = []
   over_detected = []
   non_detected = []
-  for k, pred_file in pred_files.items():
-    if k in ground_true_files:
-      ground_true = ground_true_files[k]
-      pred_locations = get_locations_from_csv(pred_file, hasHeader=True)
-      ground_true_location = get_locations_from_csv(ground_true, hasHeader=False)
-      f1 = compute_f1(pred_locations, ground_true_location, threshold)
-      f1_list.append([f"{k}-{len(ground_true_location)}-{len(pred_locations)}", f1])
-    else:
-      # record the image IDs that the model detected but not in the ground truth
-      over_detected.append(k)
 
-  # record the image IDs that are not detected by the model
-  for k in ground_true_files.keys():
-    if k not in pred_files:
-      non_detected.append(k)
+  for key in union_file_keys:
+    pred_file = pred_files[key] if key in pred_files else None
+    ground_true_file = ground_true_files[key] if key in pred_files else None
+    pred_locations = get_locations_from_csv(pred_file, hasHeader=True)
+    ground_true_locations = get_locations_from_csv(ground_true_file, hasHeader=False)
+    FP, TP, FN = prepare_f1_inputs(pred_locations, ground_true_locations, threshold)
+    f1 = compute_f1(FP, TP, FN)
+    f1_list.append([f"{key}-{len(ground_true_locations)}-{len(pred_locations)}", f1])
+
+    # record the image IDs that the model detected but not in the ground truth
+    if pred_file is None:
+      non_detected.append(ground_true_file)
+
+    # record the image IDs that are not detected by the model
+    if ground_true_file is None:
+      over_detected.append(pred_file)
 
   return (f1_list, over_detected, non_detected)
+
+
+def evaluate_global_f1(pred_dir, ground_true_dir, threshold=30):
+  """ Evaluate the prediction result based on the ground truth data
+    using F1 score. It will compute a single F1 score for over all
+    input files.
+
+  Args:
+    pred_dir: directory for the prediction csv files.
+    ground_true_dir: directory for the ground truth csv files.
+    threshold: Eucledian distance to see if the predict and ground
+      truth points are at the same circle.
+
+  Return:
+     a tuple of (a single F1_score; a list of files
+      that are detected by model, but not in the ground truth data; a
+      list of files that are not detected by model, but in the ground
+      truth data).
+  """
+  pred_files = list_files(pred_dir, "*.csv")
+  pred_files = get_file_id(pred_files, GROUND_TRUTH_FILE_ID_RE)
+  ground_true_files = list_files(ground_true_dir, "*.csv")
+  ground_true_files = get_file_id(ground_true_files, GROUND_TRUTH_FILE_ID_RE)
+
+  union_file_keys = set(pred_files.keys())
+  union_file_keys.add(set(ground_true_files.keys()))
+
+  over_detected = []
+  non_detected = []
+  FP_list = []
+  TP_list = []
+  FN_list = []
+
+  for key in union_file_keys:
+    pred_file = pred_files[key] if key in pred_files else None
+    ground_true_file = ground_true_files[key] if key in pred_files else None
+    pred_locations = get_locations_from_csv(pred_file, hasHeader=True)
+    ground_true_locations = get_locations_from_csv(ground_true_file, hasHeader=False)
+    FP, TP, FN = prepare_f1_inputs(pred_locations, ground_true_locations, threshold)
+    FP_list += FP
+    TP_list += TP
+    FN_list += FN
+
+    # record the image IDs that the model detected but not in the ground truth
+    if pred_file is None:
+      non_detected.append(ground_true_file)
+
+    # record the image IDs that are not detected by the model
+    if ground_true_file is None:
+      over_detected.append(pred_file)
+
+  f1 = compute_f1(FP_list, TP_list, FN_list)
+  return (f1, over_detected, non_detected)
+
 
 def add_ground_truth_mark_help(im_path, ground_truth_file_path, hasHeader=False,
                                shape=Shape.CROSS, mark_color=(0, 255, 127, 200)):
@@ -298,20 +393,44 @@ def test_compute_f1():
   # test case 1: the prediction result is the same with the ground truth
   predict1 = [(10, 10), (20, 30), (30, 60), (100, 53), (32, 26), (120, 66)]
   ground_true1 = [(10, 10), (20, 30), (30, 60), (100, 53), (32, 26), (120, 66)]
-  f1 = compute_f1(predict1, ground_true1, threshold)
+  FP, TP, FN = prepare_f1_inputs(predict1, ground_true1, threshold)
+  f1 = compute_f1(FP, TP, FN)
   assert f1 == 1
 
   # test case 2: the prediction result is totally different from the ground truth
   predict2 = [(10, 10), (2, 3), (3, 6), (10, 5), (3, 2), (12, 6)]
   ground_true2 = [(100, 100), (200, 300), (300, 600), (1000, 530), (320, 260), (1200, 660)]
-  f1 = compute_f1(predict2, ground_true2, threshold)
+  FP, TP, FN = prepare_f1_inputs(predict2, ground_true2, threshold)
+  f1 = compute_f1(FP, TP, FN)
   assert f1 == 0
 
   # test case 3: the prediction result partially matches the ground truth
-  predict2 = [(2, 3), (50, 180), (66, 20), (80, 70), (100, 200), (300, 400)]
-  ground_true2 = [(10, 10), (40, 50), (50, 200), (60, 110), (70, 10), (80, 80)]
-  f1 = compute_f1(predict2, ground_true2, threshold)
+  predict3 = [(2, 3), (50, 180), (66, 20), (80, 70), (100, 200), (300, 400)]
+  ground_true3 = [(10, 10), (40, 50), (50, 200), (60, 110), (70, 10), (80, 80)]
+  FP, TP, FN = prepare_f1_inputs(predict3, ground_true3, threshold)
+  f1 = compute_f1(FP, TP, FN)
   assert f1 == 2/3
+
+  # test case 4: ground truth but no predictions
+  predict4 = []
+  ground_true4 = [(10, 10), (40, 50), (50, 200), (60, 110), (70, 10), (80, 80)]
+  FP, TP, FN = prepare_f1_inputs(predict4, ground_true4, threshold)
+  f1 = compute_f1(FP, TP, FN)
+  assert f1 == 0
+
+  # test case 5: prediction but not ground truth
+  predict5 = [(2, 3), (50, 180), (66, 20), (80, 70), (100, 200), (300, 400)]
+  ground_true5 = []
+  FP, TP, FN = prepare_f1_inputs(predict5, ground_true5, threshold)
+  f1 = compute_f1(FP, TP, FN)
+  assert f1 == 0
+
+  # test case 6: no prediction but also no ground truth
+  predict6 = []
+  ground_true6 = []
+  FP, TP, FN = prepare_f1_inputs(predict6, ground_true6, threshold)
+  f1 = compute_f1(FP, TP, FN)
+  assert f1 == 0
 
 
 def test_add_ground_truth_mark():
