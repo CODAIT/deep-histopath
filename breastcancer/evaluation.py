@@ -97,6 +97,11 @@ def compute_f1(FP, TP, FN):
   precision = len(TP) / (len(TP) + len(FP)) if len(TP) + len(FP) > 0 else 0
   recall = len(TP) / (len(TP) + len(FN)) if len(TP) + len(FN) > 0 else 0
   f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+
+  print (f"TP: {len(TP)}; FP: {len(FP)}; FN: {len(FN)}")
+
+  print (f"precision: {precision}; recall: {recall}")
+
   return f1
 
 def list_files(dir, file_suffix):
@@ -202,7 +207,7 @@ def dbscan_clustering(input_coordinates, eps, min_samples):
   return [(np.mean(rows).astype(np.int), np.mean(cols).astype(np.int))
           for rows, cols in clustered_points]
 
-def cluster_prediction_result(pred_dir, eps, min_samples=1):
+def cluster_prediction_result(pred_dir, eps, min_samples, hasHeader):
   """ cluster the prediction results to avoid the duplicated
   predictions introduced by the small stride.
 
@@ -212,12 +217,13 @@ def cluster_prediction_result(pred_dir, eps, min_samples=1):
      as in the same neighborhood.
     min_samples: number of samples (or total weight) in a neighborhood
      for a point to be considered as a core point.
+    hasHeader: boolean value to indicate if the csv file has the header
   """
 
   pred_files = list_files(pred_dir, "*.csv")
   pred_files = get_file_id(pred_files, GROUND_TRUTH_FILE_ID_RE)
   for k, pred_file in pred_files.items():
-    pred_locations = get_locations_from_csv(pred_file, hasHeader=True)
+    pred_locations = get_locations_from_csv(pred_file, hasHeader=hasHeader)
 
     # apply dbscan clustering on each prediction file
     clustered_pred_locations = dbscan_clustering(pred_locations, eps=eps, min_samples=min_samples)
@@ -252,8 +258,7 @@ def evaluate_f1(pred_dir, ground_true_dir, threshold=30):
   ground_true_files = list_files(ground_true_dir, "*.csv")
   ground_true_files = get_file_id(ground_true_files, GROUND_TRUTH_FILE_ID_RE)
 
-  union_file_keys = set(pred_files.keys())
-  union_file_keys.add(set(ground_true_files.keys()))
+  union_file_keys = set(pred_files.keys()).union(set(ground_true_files.keys()))
 
   f1_list = []
   over_detected = []
@@ -261,7 +266,7 @@ def evaluate_f1(pred_dir, ground_true_dir, threshold=30):
 
   for key in union_file_keys:
     pred_file = pred_files[key] if key in pred_files else None
-    ground_true_file = ground_true_files[key] if key in pred_files else None
+    ground_true_file = ground_true_files[key] if key in ground_true_files else None
     pred_locations = get_locations_from_csv(pred_file, hasHeader=True)
     ground_true_locations = get_locations_from_csv(ground_true_file, hasHeader=False)
     FP, TP, FN = prepare_f1_inputs(pred_locations, ground_true_locations, threshold)
@@ -301,8 +306,7 @@ def evaluate_global_f1(pred_dir, ground_true_dir, threshold=30):
   ground_true_files = list_files(ground_true_dir, "*.csv")
   ground_true_files = get_file_id(ground_true_files, GROUND_TRUTH_FILE_ID_RE)
 
-  union_file_keys = set(pred_files.keys())
-  union_file_keys.add(set(ground_true_files.keys()))
+  union_file_keys = set(pred_files.keys()).union(set(ground_true_files.keys()))
 
   over_detected = []
   non_detected = []
@@ -312,7 +316,7 @@ def evaluate_global_f1(pred_dir, ground_true_dir, threshold=30):
 
   for key in union_file_keys:
     pred_file = pred_files[key] if key in pred_files else None
-    ground_true_file = ground_true_files[key] if key in pred_files else None
+    ground_true_file = ground_true_files[key] if key in ground_true_files else None
     pred_locations = get_locations_from_csv(pred_file, hasHeader=True)
     ground_true_locations = get_locations_from_csv(ground_true_file, hasHeader=False)
     FP, TP, FN = prepare_f1_inputs(pred_locations, ground_true_locations, threshold)
@@ -598,4 +602,3 @@ def test_img_quality():
   os.remove(jpg_hq_file)
   os.remove(jpg_lq_file)
   os.remove(png_file)
-
