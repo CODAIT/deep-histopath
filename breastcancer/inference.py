@@ -194,8 +194,9 @@ def predict_mitoses_num_locations(model, model_name, threshold, ROI, tile_size=6
     for tile in tiles:
       # NOTE: averaging over sigmoid outputs vs. logits may yield slightly different results, due
       # to numerical precision
-      norm_tile = normalize((tile / 255).astype(np.float32), model_name)  # normalize tile
-      aug_tiles = create_augmented_batch(norm_tile, batch_size)  # create batch of aug versions
+      prep_tile = (tile / 255).astype(np.float32)  # convert to values in [0,1]
+      aug_tiles = create_augmented_batch(prep_tile, batch_size)  # create batch of aug versions
+      norm_tiles = normalize(aug_tiles, model_name)  # normalize augmented tiles
       aug_preds = model(aug_tiles)  # make predictions on augmented batch
       pred = marginalize(aug_preds)  # average predictions
       pred_np = sess.run(pred, feed_dict={K.learning_phase(): 0})  # actually run graph
