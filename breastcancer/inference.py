@@ -177,6 +177,7 @@ def predict_mitoses_num_locations(model, model_name, threshold, ROI, tile_size=6
   from preprocess_mitoses import gen_dense_coords, extract_patch, gen_patches
   from train_mitoses import create_augmented_batch, marginalize, normalize
   import keras.backend as K
+  import tensorflow as tf
 
   ROI_height, ROI_width, ROI_channel = ROI.shape
 
@@ -191,16 +192,22 @@ def predict_mitoses_num_locations(model, model_name, threshold, ROI, tile_size=6
 
   if marginalization:
     sess = K.get_session()
+
+    # create marginalization graph
+    # NOTE: averaging over sigmoid outputs vs. logits may yield slightly different results, due
+    # to numerical precision
+    prep_tile = tf.placeholder(tf.float32, shape=[tile_size, tile_size, tile_channel])
+    aug_tiles = create_augmented_batch(prep_tile, batch_size)  # create batch of aug versions
+    norm_tiles = normalize(aug_tiles, model_name)  # normalize augmented tiles
+    aug_preds = model(aug_tiles)  # make predictions on augmented batch
+    pred = marginalize(aug_preds)  # average predictions
+
+    # make predictions
     for tile in tiles:
-      # NOTE: averaging over sigmoid outputs vs. logits may yield slightly different results, due
-      # to numerical precision
-      prep_tile = (tile / 255).astype(np.float32)  # convert to values in [0,1]
-      aug_tiles = create_augmented_batch(prep_tile, batch_size)  # create batch of aug versions
-      norm_tiles = normalize(aug_tiles, model_name)  # normalize augmented tiles
-      aug_preds = model(aug_tiles)  # make predictions on augmented batch
-      pred = marginalize(aug_preds)  # average predictions
-      pred_np = sess.run(pred, feed_dict={K.learning_phase(): 0})  # actually run graph
+      prep_tile_np = (tile / 255).astype(np.float32)  # convert to values in [0,1]
+      pred_np = sess.run(pred, feed_dict={prep_tile: prep_tile_np, K.learning_phase(): 0})
       predictions = np.concatenate((predictions, pred_np), axis=0)
+
   else:
     tile_batches = gen_batches(tiles, batch_size, include_partial=True)
     for tile_batch in tile_batches:
