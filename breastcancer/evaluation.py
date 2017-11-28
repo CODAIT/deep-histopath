@@ -153,7 +153,7 @@ def get_locations_from_csv(file, hasHeader=False, prob_threshold=None):
   else:
     data = pd.read_csv(file, header=None)
   if prob_threshold is not None:
-    locations = [(int(x[0]), int(x[1])) for x in data.values.tolist() if x[2] >= prob_threshold]
+    locations = [(int(x[0]), int(x[1])) for x in data.values.tolist() if x[2] > prob_threshold]
   else:
     locations = [(int(x[0]), int(x[1])) for x in data.values.tolist()]
   return locations
