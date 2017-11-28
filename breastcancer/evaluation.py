@@ -99,7 +99,6 @@ def compute_f1(FP, TP, FN):
   f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
 
   print (f"TP: {len(TP)}; FP: {len(FP)}; FN: {len(FN)}")
-
   print (f"precision: {precision}; recall: {recall}")
 
   return f1

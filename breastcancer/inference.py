@@ -45,10 +45,10 @@ def save_mitosis_locations_2_csv(file_path, mitosis_locations):
   """
   df = pd.DataFrame(mitosis_locations)
   df.columns = ["row", "col", "score"]
-  #df.to_csv(file_path, index=False)
+  df.to_csv(file_path, index=False)
   # skip the header and the score column to match the requirement of the
   # preprocess_mitoses.py
-  df[["row", "col"]].to_csv(file_path, index=False, header=False)
+  #df[["row", "col"]].to_csv(file_path, index=False, header=False)
 
 def check_subsetting(ROI, ROI_size, tiles, tile_size, tile_overlap, channel=3):
   """ check if the generation of tiles is right by re-combine the tiles
@@ -199,14 +199,16 @@ def predict_mitoses_num_locations(model, model_name, threshold, ROI, tile_size=6
     prep_tile = tf.placeholder(tf.float32, shape=[tile_size, tile_size, tile_channel])
     aug_tiles = create_augmented_batch(prep_tile, batch_size)  # create batch of aug versions
     norm_tiles = normalize(aug_tiles, model_name)  # normalize augmented tiles
-    aug_preds = model(aug_tiles)  # make predictions on augmented batch
+    aug_preds = model(norm_tiles)  # make predictions on normalized and augmented batch
     pred = marginalize(aug_preds)  # average predictions
 
     # make predictions
     for tile in tiles:
       prep_tile_np = (tile / 255).astype(np.float32)  # convert to values in [0,1]
-      pred_np = sess.run(pred, feed_dict={prep_tile: prep_tile_np, K.learning_phase(): 0})
+      pred_np, aug_preds_np = sess.run((pred, aug_preds), feed_dict={prep_tile: prep_tile_np, K.learning_phase(): 0})
       predictions = np.concatenate((predictions, pred_np), axis=0)
+    
+      print (f"The {predictions.shape[0]}th prediction: max: {np.max(aug_preds_np)}, min: {np.min(aug_preds_np)}, avg: {pred_np}")
 
   else:
     tile_batches = gen_batches(tiles, batch_size, include_partial=True)
@@ -287,7 +289,10 @@ def predict_mitoses_help(model_file, model_name, index, file_partition,
 
   # load the model and add the sigmoid layer
   base_model = load_model(model_file, compile=False)
-  probs = keras.layers.Activation('sigmoid')(base_model.output)
+
+  # specify the name of the added activation layer to avoid the name
+  # conflict in ResNet
+  probs = keras.layers.Activation('sigmoid', name="sigmoid")(base_model.output)
   model = keras.models.Model(inputs=base_model.input, outputs=probs)
 
   result = []
@@ -597,3 +602,34 @@ def predict_mitoses_cpu(sparkContext, model_path, model_name, input_dir, file_su
                                                     save_mitosis_locations=save_mitosis_locations,
                                                     save_mask=save_mask, isDebug=isDebug))
   return predictions_rdd
+
+def test_predict_mitoses_num_locations():
+  import keras
+  from keras.models import load_model
+  from PIL import Image
+  from train_mitoses import normalize
+
+  #TODO: change the model file path
+  model_file = 'model/0.74172_f1_1.7319_loss_8_epoch_model.hdf5'
+  model_name = 'vgg'
+  #model_file = 'model/0.72938_f1_0.067459_loss_7_epoch_model.hdf5'
+  #model_name = 'resnet'
+  marginalization = True
+  threshold = 0
+  tile_overlap = 0
+  batch_size = 128
+  ROI = np.asarray(Image.open("data/test/1_11_01_1292_413_0_0_0.png"), dtype=np.int)
+
+  # the expected probability
+  base_model = load_model(model_file  , compile=False)
+  probs = keras.layers.Activation('sigmoid', name="sigmoid")(base_model.output)
+  model = keras.models.Model(inputs=base_model.input, outputs=probs)
+  norm_ROI = normalize((ROI / 255).astype(dtype=np.float32), model_name)
+  prob = model.predict(np.expand_dims(norm_ROI, axis=0))
+  print(f"The expected probability: {prob}")
+
+  # the predicted result
+  pred_result = predict_mitoses_num_locations(model, model_name, threshold, ROI,
+                                                    tile_size=64, tile_overlap=tile_overlap, tile_channel=3,
+                                                    batch_size=batch_size, marginalization=marginalization)
+  print(f"The predicted probability: {pred_result}")
