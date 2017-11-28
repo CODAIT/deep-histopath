@@ -132,7 +132,7 @@ def get_file_id(files, file_id_re):
   return id_files
 
 
-def get_locations_from_csv(file, hasHeader=False):
+def get_locations_from_csv(file, hasHeader=False, prob_threshold=None):
   """ get the point locations from CSV file.
 
   Args:
@@ -152,7 +152,10 @@ def get_locations_from_csv(file, hasHeader=False):
     data = pd.read_csv(file)
   else:
     data = pd.read_csv(file, header=None)
-  locations = [(int(x[0]), int(x[1])) for x in data.values.tolist()]
+  if prob_threshold is not None:
+    locations = [(int(x[0]), int(x[1])) for x in data.values.tolist() if x[2] >= prob_threshold]
+  else:
+    locations = [(int(x[0]), int(x[1])) for x in data.values.tolist()]
   return locations
 
 
@@ -236,7 +239,7 @@ def cluster_prediction_result(pred_dir, eps, min_samples, hasHeader):
 
 
 
-def evaluate_f1(pred_dir, ground_true_dir, threshold=30):
+def evaluate_f1(pred_dir, ground_true_dir, threshold=30, prob_threshold=None):
   """ Evaluate the prediction result based on the ground truth data
     using F1 score. It will compute F1 score for each input file.
 
@@ -266,7 +269,8 @@ def evaluate_f1(pred_dir, ground_true_dir, threshold=30):
   for key in union_file_keys:
     pred_file = pred_files[key] if key in pred_files else None
     ground_true_file = ground_true_files[key] if key in ground_true_files else None
-    pred_locations = get_locations_from_csv(pred_file, hasHeader=True)
+    pred_locations = get_locations_from_csv(pred_file, hasHeader=True,
+        prob_threshold=prob_threshold)
     ground_true_locations = get_locations_from_csv(ground_true_file, hasHeader=False)
     FP, TP, FN = prepare_f1_inputs(pred_locations, ground_true_locations, threshold)
     f1 = compute_f1(FP, TP, FN)
@@ -283,7 +287,7 @@ def evaluate_f1(pred_dir, ground_true_dir, threshold=30):
   return (f1_list, over_detected, non_detected)
 
 
-def evaluate_global_f1(pred_dir, ground_true_dir, threshold=30):
+def evaluate_global_f1(pred_dir, ground_true_dir, threshold=30, prob_threshold=None):
   """ Evaluate the prediction result based on the ground truth data
     using F1 score. It will compute a single F1 score for over all
     input files.
@@ -316,7 +320,8 @@ def evaluate_global_f1(pred_dir, ground_true_dir, threshold=30):
   for key in union_file_keys:
     pred_file = pred_files[key] if key in pred_files else None
     ground_true_file = ground_true_files[key] if key in ground_true_files else None
-    pred_locations = get_locations_from_csv(pred_file, hasHeader=True)
+    pred_locations = get_locations_from_csv(pred_file, hasHeader=True,
+        prob_threshold=prob_threshold)
     ground_true_locations = get_locations_from_csv(ground_true_file, hasHeader=False)
     FP, TP, FN = prepare_f1_inputs(pred_locations, ground_true_locations, threshold)
     FP_list += FP
@@ -601,3 +606,20 @@ def test_img_quality():
   os.remove(jpg_hq_file)
   os.remove(jpg_lq_file)
   os.remove(png_file)
+
+
+def test_evaluate_global_f1():
+  # NOTE: `pred` refers to `/8tb/deep_histopath/pred` on the servers
+  pred_dir = "pred/result/vgg/32_vgg_nm_0stride/"
+  ground_true_dir = "pred/mitoses_ground_truth_test/val/"
+  threshold = 30
+  # implicit 0.5 threshold
+  f1_list, over_detected, non_detected = evaluate_global_f1(pred_dir, ground_true_dir, threshold)
+  assert np.allclose(f1_list, 0.518918918918919)
+
+  # custom threshold
+  prob_threshold = 0.6
+  f1_list, over_detected, non_detected = evaluate_global_f1(pred_dir, ground_true_dir, threshold,
+      prob_threshold)
+  assert np.allclose(f1_list, 0.5445544554455445)
+
