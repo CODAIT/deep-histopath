@@ -86,6 +86,7 @@ def draw_circle(draw, center_location, color, radius=32, width=5):
     width: width of the circle outline
   """
   r, c = center_location
+  radius = int(radius)
   for i in range(width):
     r0 = r - (radius + i)
     c0 = c - (radius + i)
@@ -93,23 +94,29 @@ def draw_circle(draw, center_location, color, radius=32, width=5):
     c1 = c + (radius + i)
     draw.ellipse([(c0, r0), (c1, r1)], fill=None, outline=color)
 
-def add_mark(im, locations, shape=Shape.SQUARE, mark_color=(0, 255, 127, 200)):
+def add_mark(im, locations, shape=Shape.SQUARE, mark_color=(0, 255, 127, 200), hasProb=False):
   """
   add the mark for each point of the input locations into the image
 
   Args:
     im: PIL.Image object
-    locations: a list of point locations, such as [(r0, c0),
-      (r1, c1), (r2, c2), ...]
+    locations: a list of point locations, such as [(r0, c0, p0),
+      (r1, c1, p1), (r2, c2, p2), ...]
     shape: mark shape, it could be Shape.CROSS, Shape.SQUARE,
       Shape.CIRCLE
     mark_color: mark color, default value is (0, 255, 127, 200)
+    hasProb: bool value to tell if the input csv file has the
+      probability column.
   """
   radius = 32
   width = 8
 
   draw = ImageDraw.Draw(im, 'RGBA')
-  for r, c in locations:
+  for t in locations:
+    r = t[0]
+    c = t[1]
+    p = t[2] if hasProb else 1
+    radius = radius * p
     r0 = r - radius
     c0 = c - radius
     r1 = r + radius

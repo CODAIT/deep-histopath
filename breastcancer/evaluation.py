@@ -23,7 +23,7 @@ def prepare_f1_inputs(prediction, ground_truth, threshold=30):
 
   Args:
     prediction: prediction result, a list of point locations, e.g.
-      [(r0, c0), (r1, c1), (r2, c2), ...].
+      [(r0, c0, p0), (r1, c1, p1), (r2, c2, p2), ...].
     ground_truth: groud truth data, a list of point locations, e.g.
       [(r0, c0), (r1, c1), (r2, c2), ...].
     threshold: Eucledian distance to see if the predict and ground truth
@@ -58,13 +58,13 @@ def prepare_f1_inputs(prediction, ground_truth, threshold=30):
       # they will be counted as one true positive. Here we use a list
       # to collect this kind of points for each ground truth point.
       tp = []
-      for pred_r, pred_c in prediction:
+      for pred_r, pred_c, pre_prob in prediction:
         dist = np.sqrt((gt_r - pred_r) ** 2 + (gt_c - pred_c) ** 2)
         if dist <= threshold:
-          tp.append((pred_r, pred_c))
+          tp.append((pred_r, pred_c, pre_prob))
           # remove the TP point from the FP list
-          if (pred_r, pred_c) in FP:
-            FP.remove((pred_r, pred_c))
+          if (pred_r, pred_c, pre_prob) in FP:
+            FP.remove((pred_r, pred_c, pre_prob))
       if len(tp) == 0:
         # if no points fall within this ground truth point, the ground
         # truth point will be treated as FN.
@@ -132,7 +132,7 @@ def get_file_id(files, file_id_re):
   return id_files
 
 
-def get_locations_from_csv(file, hasHeader=False, prob_threshold=None):
+def get_locations_from_csv(file, hasHeader=False, hasProb=True):
   """ get the point locations from CSV file.
 
   Args:
@@ -140,9 +140,11 @@ def get_locations_from_csv(file, hasHeader=False, prob_threshold=None):
       point coordinates.
     hasHeader: bool value to tell if the input csv file has a header or
       not.
+    hasProb: bool value to tell if the input csv file has the
+      probability column
 
   Return:
-    a list of point locations, e.g. [(r0, c0), (r1, c1), ......].
+    a list of point locations, e.g. [(r0, c0, p0), (r1, c1, p1), ......].
   """
   # handle the case that the input file does not exist
   if file is None:
@@ -152,8 +154,9 @@ def get_locations_from_csv(file, hasHeader=False, prob_threshold=None):
     data = pd.read_csv(file)
   else:
     data = pd.read_csv(file, header=None)
-  if prob_threshold is not None:
-    locations = [(int(x[0]), int(x[1])) for x in data.values.tolist() if x[2] > prob_threshold]
+
+  if hasProb:
+    locations = [(int(x[0]), int(x[1]), float(x[2])) for x in data.values.tolist()]
   else:
     locations = [(int(x[0]), int(x[1])) for x in data.values.tolist()]
   return locations
@@ -178,38 +181,50 @@ def get_data_from_csv(file, hasHeader=False):
 
   return data.values.tolist()
 
-def dbscan_clustering(input_coordinates, eps, min_samples):
+def dbscan_clustering(input_coordinates, eps, min_samples, isWeightedAvg=False):
   """ cluster the prediction results by dbscan. It could avoid the
   duplicated predictions caused by the small stride.
 
   Args:
-    input_coordinates: the prediction coordinates, e.g. [(r0, c0), (r1,
-     c1), (r2, c2), ...].
+    input_coordinates: the prediction coordinates, e.g. [(r0, c0, p0), (r1,
+     c1, p1), (r2, c2, p2), ...].
     eps: maximum distance between two samples for them to be considered
      as in the same neighborhood.
     min_samples: number of samples (or total weight) in a neighborhood
      for a point to be considered as a core point.
+    isWeightedAvg: boolean value to indicate if add the prediction
+     probabilities as  the weight to compute the averaged coordinates of
+     each cluster.
 
   Return:
     a list of average coordinates for each cluster
   """
-  db = DBSCAN(eps=eps, min_samples=min_samples).fit(input_coordinates)
+  input_coordinates_without_probability = [(t[0], t[1]) for t in input_coordinates]
+  db = DBSCAN(eps=eps, min_samples=min_samples).fit(input_coordinates_without_probability)
   labels = db.labels_
   unique_labels = set(labels)
-  clustered_points = [[[],[]] for _ in unique_labels] # store the coordinates for each cluster
+  clustered_points = [[[], [], []] for _ in unique_labels] # store the coordinates for each cluster
 
   # collect the coordinates for each cluster
   for i in range(0, len(input_coordinates)):
     label = labels[i]
-    r, c = input_coordinates[i]
+    r, c, p = input_coordinates[i]
     clustered_points[label][0].append(r)
     clustered_points[label][1].append(c)
+    clustered_points[label][2].append(p)
 
-  # average the coordinates for each cluster
-  return [(np.mean(rows).astype(np.int), np.mean(cols).astype(np.int))
-          for rows, cols in clustered_points]
+  # average the weighted coordinates for each cluster
+  if isWeightedAvg:
+    result = [(int(np.sum(np.array(rows) * np.array(probs)) / sum(probs)),
+               int(np.sum(np.array(cols) * np.array(probs)) / sum(probs)),
+               np.mean(probs))
+              for rows, cols, probs in clustered_points]
+  else:
+    result = [(int(np.mean(rows)), int(np.mean(cols)), np.mean(probs))
+              for rows, cols, probs in clustered_points]
+  return result
 
-def cluster_prediction_result(pred_dir, eps, min_samples, hasHeader):
+def cluster_prediction_result(pred_dir, eps, min_samples, hasHeader, isWeightedAvg=False):
   """ cluster the prediction results to avoid the duplicated
   predictions introduced by the small stride.
 
@@ -220,23 +235,27 @@ def cluster_prediction_result(pred_dir, eps, min_samples, hasHeader):
     min_samples: number of samples (or total weight) in a neighborhood
      for a point to be considered as a core point.
     hasHeader: boolean value to indicate if the csv file has the header
+    isWeightedAvg: boolean value to indicate if add the prediction.
+     probabilities as  the weight to compute the averaged coordinates of
+     each cluster.
   """
 
   pred_files = list_files(pred_dir, "*.csv")
   pred_files = get_file_id(pred_files, GROUND_TRUTH_FILE_ID_RE)
   for k, pred_file in pred_files.items():
-    pred_locations = get_locations_from_csv(pred_file, hasHeader=hasHeader)
+    pred_locations = get_locations_from_csv(pred_file, hasHeader=hasHeader, hasProb=True)
 
     # apply dbscan clustering on each prediction file
-    clustered_pred_locations = dbscan_clustering(pred_locations, eps=eps, min_samples=min_samples)
+    clustered_pred_locations = dbscan_clustering(pred_locations, eps=eps,
+                                                 min_samples=min_samples,
+                                                 isWeightedAvg=isWeightedAvg)
 
     # save the prediction results
     clustered_file_name = pred_file.replace(k, f"clustered_{k}")
-    df = pd.DataFrame(clustered_pred_locations, columns=['row', 'col'])
+    df = pd.DataFrame(clustered_pred_locations, columns=['row', 'col', 'avg_prob'])
     dir = os.path.dirname(clustered_file_name)
     os.makedirs(dir, exist_ok=True)
     df.to_csv(clustered_file_name, index=False)
-
 
 
 def evaluate_f1(pred_dir, ground_true_dir, threshold=30, prob_threshold=None):
@@ -248,6 +267,7 @@ def evaluate_f1(pred_dir, ground_true_dir, threshold=30, prob_threshold=None):
     ground_true_dir: directory for the ground truth csv files.
     threshold: Eucledian distance to see if the predict and ground
       truth points are at the same circle.
+    prob_threshold: prediction probability threshold
 
   Return:
      a tuple of (a F1_score list for each input file; a list of files
@@ -269,9 +289,11 @@ def evaluate_f1(pred_dir, ground_true_dir, threshold=30, prob_threshold=None):
   for key in union_file_keys:
     pred_file = pred_files[key] if key in pred_files else None
     ground_true_file = ground_true_files[key] if key in ground_true_files else None
-    pred_locations = get_locations_from_csv(pred_file, hasHeader=True,
-        prob_threshold=prob_threshold)
-    ground_true_locations = get_locations_from_csv(ground_true_file, hasHeader=False)
+    pred_locations = get_locations_from_csv(pred_file, hasHeader=True, hasProb=True)
+    if prob_threshold is not None:
+      pred_locations = [location for location in pred_locations if location[2] > prob_threshold]
+
+    ground_true_locations = get_locations_from_csv(ground_true_file, hasHeader=False, hasProb=False)
     FP, TP, FN = prepare_f1_inputs(pred_locations, ground_true_locations, threshold)
     f1 = compute_f1(FP, TP, FN)
     f1_list.append([f"{key}-{len(ground_true_locations)}-{len(pred_locations)}", f1])
@@ -297,6 +319,7 @@ def evaluate_global_f1(pred_dir, ground_true_dir, threshold=30, prob_threshold=N
     ground_true_dir: directory for the ground truth csv files.
     threshold: Eucledian distance to see if the predict and ground
       truth points are at the same circle.
+    prob_threshold: prediction probability threshold
 
   Return:
      a tuple of (a single F1_score; a list of files
@@ -320,9 +343,11 @@ def evaluate_global_f1(pred_dir, ground_true_dir, threshold=30, prob_threshold=N
   for key in union_file_keys:
     pred_file = pred_files[key] if key in pred_files else None
     ground_true_file = ground_true_files[key] if key in ground_true_files else None
-    pred_locations = get_locations_from_csv(pred_file, hasHeader=True,
-        prob_threshold=prob_threshold)
-    ground_true_locations = get_locations_from_csv(ground_true_file, hasHeader=False)
+    pred_locations = get_locations_from_csv(pred_file, hasHeader=True, hasProb=True)
+    if prob_threshold is not None:
+      pred_locations = [location for location in pred_locations if location[2] > prob_threshold]
+
+    ground_true_locations = get_locations_from_csv(ground_true_file, hasHeader=False, hasProb=False)
     FP, TP, FN = prepare_f1_inputs(pred_locations, ground_true_locations, threshold)
     FP_list += FP
     TP_list += TP
@@ -341,7 +366,7 @@ def evaluate_global_f1(pred_dir, ground_true_dir, threshold=30, prob_threshold=N
 
 
 def add_ground_truth_mark_help(im_path, ground_truth_file_path, hasHeader=False,
-                               shape=Shape.CROSS, mark_color=(0, 255, 127, 200)):
+                               shape=Shape.CROSS, mark_color=(0, 255, 127, 200), hasProb=False):
   """ add the mark for each point in the ground truth data.
 
   Args:
@@ -351,15 +376,18 @@ def add_ground_truth_mark_help(im_path, ground_truth_file_path, hasHeader=False,
     shape: options for mark shape. It could be Shape.CROSS, Shape.SQUARE,
       or Shape.CIRCLE.
     mark_color: mark color, the default value is (0, 255, 127, 200)
+    hasProb: bool value to tell if the input csv file has the
+      probability column
   """
   im = Image.open(im_path)
-  locations = get_locations_from_csv(ground_truth_file_path, hasHeader=hasHeader)
-  add_mark(im, locations, shape, mark_color=mark_color)
+  locations = get_locations_from_csv(ground_truth_file_path, hasHeader=hasHeader, hasProb=hasProb)
+  add_mark(im, locations, shape, mark_color=mark_color, hasProb=hasProb)
+  print(im_path)
   im.save(im_path)
 
 def add_ground_truth_mark(sparkContext, partition_num, im_dir, im_suffix, ground_truth_dir,
                           ground_truth_file_suffix, shape=Shape.CROSS,
-                          mark_color=(0, 255, 127, 200), hasHeader=False):
+                          mark_color=(0, 255, 127, 200), hasHeader=False, hasProb=False):
   """ Add the ground truth data as marks into the images in parallel.
 
     Args:
@@ -373,6 +401,8 @@ def add_ground_truth_mark(sparkContext, partition_num, im_dir, im_suffix, ground
         or Shape.CIRCLE.
       hasHeader: bool value to tell if the ground truth csv file has a
         header.
+      hasProb: bool value to tell if the input csv file has the
+      probability column.
     """
 
   # assume that the image file path and ground truth file path are like
@@ -392,7 +422,7 @@ def add_ground_truth_mark(sparkContext, partition_num, im_dir, im_suffix, ground
   # parallel the input images, and add the marks to each image
   rdd = sparkContext.parallelize(img_ground_truth, partition_num)
   rdd.foreach(lambda t: add_ground_truth_mark_help(t[0], t[1], hasHeader=hasHeader, shape=shape,
-                                                   mark_color=mark_color))
+                                                   mark_color=mark_color, hasProb=hasProb))
 
 
 def test_compute_f1():
@@ -452,10 +482,11 @@ def test_add_ground_truth_mark():
   ground_truth_dir = "data/mitoses/mitoses_ground_truth"
   ground_truth_file_suffix = "*.csv"
   hasHeader = False
+  hasProb = True
 
   add_ground_truth_mark(sparkContext, partition_num, im_dir, im_suffix, ground_truth_dir,
-                        ground_truth_file_suffix, Shape.CIRCLE, hasHeader)
-
+                        ground_truth_file_suffix, Shape.SQUARE, mark_color=(0, 255, 127, 200),
+                        hasHeader=hasHeader, hasProb=hasProb)
 
 def test_img_quality():
   # this test shows the image quality difference between different image
@@ -612,6 +643,7 @@ def test_evaluate_global_f1():
   # NOTE: `pred` refers to `/8tb/deep_histopath/pred` on the servers
   pred_dir = "pred/result/vgg/32_vgg_nm_0stride/"
   ground_true_dir = "pred/mitoses_ground_truth_test/val/"
+
   threshold = 30
   # implicit 0.5 threshold
   f1_list, over_detected, non_detected = evaluate_global_f1(pred_dir, ground_true_dir, threshold)
@@ -622,4 +654,3 @@ def test_evaluate_global_f1():
   f1_list, over_detected, non_detected = evaluate_global_f1(pred_dir, ground_true_dir, threshold,
       prob_threshold)
   assert np.allclose(f1_list, 0.5445544554455445)
-
