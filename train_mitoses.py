@@ -545,10 +545,10 @@ def initialize_variables(sess):
 
 # training
 
-def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_size, val_batch_size,
-    clf_epochs, finetune_epochs, clf_lr, finetune_lr, finetune_momentum, finetune_layers, l2,
-    augmentation, marginalization, threads, prefetch_batches, log_interval, checkpoint, resume,
-    seed):
+def train(train_path, val_path, exp_path, model_name, model_weights, patch_size, train_batch_size,
+    val_batch_size, clf_epochs, finetune_epochs, clf_lr, finetune_lr, finetune_momentum,
+    finetune_layers, l2, augmentation, marginalization, threads, prefetch_batches, log_interval,
+    checkpoint, resume, seed):
   """Train a model.
 
   Args:
@@ -559,6 +559,9 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
     exp_path: String path in which to store the model checkpoints, logs,
       etc. for this experiment
     model_name: String indicating the model to use.
+    model_weights: Optional string path to an HDF5 file containing the
+      initial weights of the model.  If None, then pretrained imagenet
+      weights will be used.
     patch_size: Integer length to which the square patches will be
       resized.
     train_batch_size: Integer training batch size.
@@ -630,6 +633,8 @@ def train(train_path, val_path, exp_path, model_name, patch_size, train_batch_si
   # models
   with tf.name_scope("model"):
     model, model_base = create_model(model_name, input_shape, images)
+    if model_weights is not None:
+      model.load_weights(model_weights)
 
     # compute logits and predictions, possibly with marginalization
     # NOTE: tf prefers to feed logits into a combined sigmoid and logistic loss function for
@@ -882,6 +887,9 @@ def main(args=None):
   parser.add_argument("--model", default="vgg", choices=["logreg", "vgg", "vgg19", "resnet"],
       help="name of the model to use in ['logreg', 'vgg', 'vgg19', 'resnet'] "\
            "(default: %(default)s)")
+  parser.add_argument("--model_weights", default=None,
+      help="optional hdf5 file containing the initial weights of the model. if not supplied, the "\
+           "model will start with pretrained weights from imagenet. (default: %(default)s)")
   parser.add_argument("--patch_size", type=int, default=64,
       help="integer length to which the square patches will be resized (default: %(default)s)")
   parser.add_argument("--train_batch_size", type=int, default=32,
@@ -969,11 +977,12 @@ def main(args=None):
 
   # train!
   train(train_path=train_path, val_path=val_path, exp_path=exp_path, model_name=args.model,
-      patch_size=args.patch_size, train_batch_size=args.train_batch_size,
-      val_batch_size=args.val_batch_size, clf_epochs=args.clf_epochs,
-      finetune_epochs=args.finetune_epochs, clf_lr=args.clf_lr, finetune_lr=args.finetune_lr,
-      finetune_momentum=args.finetune_momentum, finetune_layers=args.finetune_layers, l2=args.l2,
-      augmentation=args.augment, marginalization=args.marginalize, threads=args.threads,
+      model_weights=args.model_weights, patch_size=args.patch_size,
+      train_batch_size=args.train_batch_size, val_batch_size=args.val_batch_size,
+      clf_epochs=args.clf_epochs, finetune_epochs=args.finetune_epochs, clf_lr=args.clf_lr,
+      finetune_lr=args.finetune_lr, finetune_momentum=args.finetune_momentum,
+      finetune_layers=args.finetune_layers, l2=args.l2, augmentation=args.augment,
+      marginalization=args.marginalize, threads=args.threads,
       prefetch_batches=args.prefetch_batches, log_interval=args.log_interval,
       checkpoint=args.checkpoint, resume=args.resume, seed=args.seed)
 
