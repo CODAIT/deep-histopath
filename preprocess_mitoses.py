@@ -357,8 +357,8 @@ def save_patch(patch, path, lab, case, region, row, col, rotation, row_shift, co
 
 def preprocess(images_path, labels_path, base_save_path, train_size, patch_size, rotations_train,
     rotations_val, translations_train, translations_val, max_shift, stride_train, stride_val,
-    overlap_threshold, p_train, p_val, model=None, model_name=None, pred_threshold=None,
-    fp_rotations=None, fp_translations=None, seed=None):
+    overlap_threshold, p_train, p_val, fp_path=None, model=None, model_name=None,
+    pred_threshold=None, fp_rotations=None, fp_translations=None, seed=None):
   """Generate a mitosis detection patch dataset.
 
   This generates train/val datasets of mitosis/normal image patches for
@@ -409,6 +409,9 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
       in the training set.
     p_val: A decimal probability of sampling each normal patch
       in the validation set.
+    fp_path: Optional path to a folder that contains false-positive
+      coordinates, which will be used instead of the model for
+      false-positive oversampling.
     model: Optional Keras Model to use for false-positive oversampling.
     model_name: String indicating the model being used, which is used
       for determining the correct normalization.  TODO: replace this
@@ -474,15 +477,23 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
             os.makedirs(save_path)  # create if necessary
           mask = create_mask(h, w, coords, patch_size)
           # optional false_positive oversampling
-          if model is not None and split_name == "train":
+          if fp_path is not None:
+            fp_coords_path = os.path.join(fp_path, case, "{}.csv".format(region))
+            if os.path.isfile(fp_coords_path):
+              fp_coords = np.loadtxt(fp_coords_path, dtype=np.int64, delimiter=',', ndmin=2)
+            else:  # a missing file indicates no mitoses
+              fp_coords = []  # no mitoses
+          elif model is not None and split_name == "train":
             # oversample all false-positive cases in the training set
             normal_coords_gen = gen_normal_coords(mask, patch_size, stride, overlap_threshold)
-            fp_coords_gen = gen_fp_coords(im, normal_coords_gen, patch_size, model, model_name,
+            fp_coords = gen_fp_coords(im, normal_coords_gen, patch_size, model, model_name,
                 pred_threshold)
-            fp_patch_gen = gen_patches(im, fp_coords_gen, patch_size, fp_rotations, fp_translations,
-                max_shift, 1)
-            for patch, row, col, rot, row_shift, col_shift in fp_patch_gen:
-              save_patch(patch, save_path, lab, case, region, row, col, rot, row_shift, col_shift)
+          else:
+            fp_coords = []
+          fp_patch_gen = gen_patches(im, fp_coords, patch_size, fp_rotations, fp_translations,
+              max_shift, 1)
+          for patch, row, col, rot, row_shift, col_shift in fp_patch_gen:
+            save_patch(patch, save_path, lab, case, region, row, col, rot, row_shift, col_shift)
           # regular sampling for normal cases
           # NOTE: This may sample the false-positive patches again, but that's fine for now
           normal_coords_gen = gen_normal_coords(mask, patch_size, stride, overlap_threshold)
@@ -548,6 +559,9 @@ if __name__ == "__main__":
       help="probability of sampling each normal patch in the training set (default: %(default)s)")
   parser.add_argument("--p_val", type=lambda x: check_float_range(x, 0, 1), default=1,
       help="probability of sampling each normal patch in the validation set (default: %(default)s)")
+  parser.add_argument("--fp_path",
+      help="path to false-positive locations, which will be used instead of the model "\
+           "(default: %(default)s)")
   parser.add_argument("--model_path",
       help="path to a Keras model to use for false-positive oversampling (default: %(default)s)")
   # TODO: replace this with unified normalization flag used here and for training
@@ -596,11 +610,15 @@ if __name__ == "__main__":
     model = None
 
   # preprocess!
-  preprocess(args.images_path, args.labels_path, args.save_path, args.train_size, args.patch_size,
-      args.rotations_train, args.rotations_val, args.translations_train, args.translations_val,
-      args.max_shift, args.stride_train, args.stride_val, args.overlap_threshold, args.p_train,
-      args.p_val, model, args.model_name, args.pred_threshold, args.fp_rotations,
-      args.fp_translations, args.seed)
+  preprocess(images_path=args.images_path, labels_path=args.labels_path,
+      base_save_path=args.save_path, train_size=args.train_size, patch_size=args.patch_size,
+      rotations_train=args.rotations_train, rotations_val=args.rotations_val,
+      translations_train=args.translations_train, translations_val=args.translations_val,
+      max_shift=args.max_shift, stride_train=args.stride_train, stride_val=args.stride_val,
+      overlap_threshold=args.overlap_threshold, p_train=args.p_train, p_val=args.p_val,
+      fp_path=args.fp_path, model=model, model_name=args.model_name,
+      pred_threshold=args.pred_threshold, fp_rotations=args.fp_rotations,
+      fp_translations=args.fp_translations, seed=args.seed)
 
 
 # ---
