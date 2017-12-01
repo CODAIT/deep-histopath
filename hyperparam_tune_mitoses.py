@@ -21,6 +21,11 @@ def main(args=None):
   parser.add_argument("--models", nargs='*', default=["vgg", "resnet"],
       help="list of names of models to use, where the names can be selected from ['logreg', "\
            "'vgg', 'vgg19', 'resnet'] (default: %(default)s)")
+  parser.add_argument("--model_weights", default=None,
+      help="optional hdf5 file containing the initial weights of the model. if not supplied, the "\
+           "model will start with pretrained weights from imagenet. if this is set, the `models` "\
+           "list must contain a single model that is compatible with these weights "\
+           "(default: %(default)s)")
   parser.add_argument("--train_batch_sizes", nargs='*', type=int, default=[32],
       help="list of training batch sizes (default: %(default)s)")
   parser.add_argument("--val_batch_size", type=int, default=32,
@@ -78,6 +83,9 @@ def main(args=None):
 
     model = random.choice(args.models)
     train_args.append(f"--model={model}")
+
+    if args.model_weights:
+      train_args.append(f"--model_weights={args.model_weights}")
 
     train_batch_size = random.choice(args.train_batch_sizes)
     train_args.append(f"--train_batch_size={train_batch_size}")
