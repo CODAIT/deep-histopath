@@ -9,9 +9,9 @@ from PIL import Image
 from breastcancer.visualization import Shape, add_mark
 from sklearn.cluster import DBSCAN
 
-GROUND_TRUTH_FILE_ID_RE = "\d+/\d+"
+GROUND_TRUTH_FILE_ID_RE = "/\d+/\d+.csv"
 
-def prepare_f1_inputs(prediction, ground_truth, threshold=30):
+def prepare_f1_inputs(prediction, ground_truth, threshold=30, file_id=None):
   """ Prepare the input variables (TP, FP, and PN) for computing F1
   score.
 
@@ -20,6 +20,8 @@ def prepare_f1_inputs(prediction, ground_truth, threshold=30):
   FP: not within the threshold distance of a ground truth location;
   FN: all ground truth locations that do not have a detection within
     the threshold.
+  file_id: file id for the input prediction and ground truth data,
+    which should have the same file id
 
   Args:
     prediction: prediction result, a list of point locations, e.g.
@@ -30,19 +32,23 @@ def prepare_f1_inputs(prediction, ground_truth, threshold=30):
       points are at the same circle.
 
   Return:
-    A tuple of (FP, TP, FN).
+    A tuple of (FP, TP, FN), where TP will be a list of list of tuples like
+    [[(file_id0, r0, c0, prob0, 'TP'),..., (file_id_n, r_n, c_n, prob_n,
+     'TP')], [.....], ......, [......]], FP will be like [(file_id, r,
+     c, prob, 'FP'), .....], FN will be like [(file_id, r, c, prob,
+     'FN'), .....]
   """
   if len(prediction) == 0 and len(ground_truth) != 0:
     FP = []
     TP = []
-    FN = ground_truth
+    FN = [(file_id, r, c, 999, 'FN') for (r, c) in ground_truth]
   elif len(prediction) != 0 and len(ground_truth) == 0:
-    FP = prediction
+    FP = [(file_id, r, c, p, 'FP') for (r, c, p) in prediction]
     TP = []
     FN = []
   elif len(prediction) != 0 and len(ground_truth) != 0:
     # initialize the values.
-    FP = prediction.copy()
+    FP = [(file_id, r, c, p, 'FP') for (r, c, p) in prediction]
     TP = []
     FN = []
     # check which points in the ground truth are located with each other
@@ -61,14 +67,15 @@ def prepare_f1_inputs(prediction, ground_truth, threshold=30):
       for pred_r, pred_c, pre_prob in prediction:
         dist = np.sqrt((gt_r - pred_r) ** 2 + (gt_c - pred_c) ** 2)
         if dist <= threshold:
-          tp.append((pred_r, pred_c, pre_prob))
+          tp.append((file_id, pred_r, pred_c, pre_prob, 'TP'))
           # remove the TP point from the FP list
-          if (pred_r, pred_c, pre_prob) in FP:
-            FP.remove((pred_r, pred_c, pre_prob))
+          if (file_id, pred_r, pred_c, pre_prob, 'FP') in FP:
+            FP.remove((file_id, pred_r, pred_c, pre_prob, 'FP'))
       if len(tp) == 0:
         # if no points fall within this ground truth point, the ground
-        # truth point will be treated as FN.
-        FN.append((gt_r, gt_c))
+        # truth point will be treated as FN. 999 does not mean the
+        # prediction probability, it will indicate this is FN
+        FN.append((file_id, gt_r, gt_c, 999, 'FN'))
       else:
         # the reason of using .append() here instead of += is to count
         # several points falling in a single ground truth location as
@@ -121,7 +128,7 @@ def list_files(dir, file_suffix):
 def get_file_id(files, file_id_re):
   """ get the file id using the file id regular expression
   Args:
-    files: input file paths
+    files: list of input file paths
     file_id_re: regular expression string used to detect the file ID
       from the file path
 
@@ -129,7 +136,12 @@ def get_file_id(files, file_id_re):
     a dictionary of file id and its full file path
   """
   id_files = {re.findall(file_id_re, x)[0]: x for x in files}
-  return id_files
+
+  # the id generated in the above will be like "/12/01.csv". The prefix
+  # `/` and suffix '.cvs' need to be removed because this id will be
+  # used as the part of file path in other places.
+  id_files_update = {id[1 : len(id) - 4] : file for id, file in id_files.items()}
+  return id_files_update
 
 
 def get_locations_from_csv(file, hasHeader=False, hasProb=True):
@@ -294,7 +306,7 @@ def evaluate_f1(pred_dir, ground_true_dir, threshold=30, prob_threshold=None):
       pred_locations = [location for location in pred_locations if location[2] > prob_threshold]
 
     ground_true_locations = get_locations_from_csv(ground_true_file, hasHeader=False, hasProb=False)
-    FP, TP, FN = prepare_f1_inputs(pred_locations, ground_true_locations, threshold)
+    FP, TP, FN = prepare_f1_inputs(pred_locations, ground_true_locations, threshold, file_id=key)
     f1 = compute_f1(FP, TP, FN)
     f1_list.append([f"{key}-{len(ground_true_locations)}-{len(pred_locations)}", f1])
 
@@ -325,7 +337,7 @@ def evaluate_global_f1(pred_dir, ground_true_dir, threshold=30, prob_threshold=N
      a tuple of (a single F1_score; a list of files
       that are detected by model, but not in the ground truth data; a
       list of files that are not detected by model, but in the ground
-      truth data).
+      truth data; a list of FP; a list of TP; a list of FN).
   """
   pred_files = list_files(pred_dir, "*.csv")
   pred_files = get_file_id(pred_files, GROUND_TRUTH_FILE_ID_RE)
@@ -348,7 +360,7 @@ def evaluate_global_f1(pred_dir, ground_true_dir, threshold=30, prob_threshold=N
       pred_locations = [location for location in pred_locations if location[2] > prob_threshold]
 
     ground_true_locations = get_locations_from_csv(ground_true_file, hasHeader=False, hasProb=False)
-    FP, TP, FN = prepare_f1_inputs(pred_locations, ground_true_locations, threshold)
+    FP, TP, FN = prepare_f1_inputs(pred_locations, ground_true_locations, threshold, file_id=key)
     FP_list += FP
     TP_list += TP
     FN_list += FN
@@ -362,8 +374,54 @@ def evaluate_global_f1(pred_dir, ground_true_dir, threshold=30, prob_threshold=N
       over_detected.append(pred_file)
 
   f1 = compute_f1(FP_list, TP_list, FN_list)
-  return (f1, over_detected, non_detected)
+  return (f1, over_detected, non_detected, FP_list, TP_list, FN_list)
 
+def export_F1_inputs_TP_FP_FN(output_path, FP, TP, FN):
+  """ Export TP, FP, FN predictions into a single csv file
+
+  Args:
+    output_path: output file path
+    FP: a list of FP prediction tuples e.g. [(file_id, row, col,
+     prob, label), ......]
+    TP: a list of TP prediction tuples e.g. [(file_id, row, col,
+     prob, label), ......]
+    FN: a list of FN prediction tuples e.g. [(file_id, row, col,
+     prob, label), ......]
+  """
+  TP_flat = []
+  for tp_col in TP:
+    for tp in tp_col:
+      TP_flat.append(tp)
+
+  result = []
+  result += FP
+  result += TP_flat
+  result += FN
+  df = pd.DataFrame(result, columns=['file_id', 'row', 'col', 'prob', 'label'])
+
+  dir = os.path.dirname(output_path)
+  os.makedirs(dir, exist_ok=True)
+  df.to_csv(output_path, index=False)
+
+def export_single_F1_input(output_dir, f1_parameter, f1_parameter_name):
+  """ Export the prediction results with the label (e.g. FP, TP, FN)
+    into the csv file
+  Args:
+    output_dir: directory for the output file
+    f1_parameter: a list of prediction tuples e.g. [(file_id, row, col,
+     prob, label), ......]
+    f1_parameter_name: label string, which could be FP, TP, or FN
+  """
+
+  df = pd.DataFrame(f1_parameter, columns=['file_id', 'row', 'col', 'prob', 'label'])
+  df = df.groupby(['file_id'])
+  for group in df:
+    file_path = group[0] + ".csv"
+    file_path = os.path.join(output_dir, f1_parameter_name, file_path)
+    dir = os.path.dirname(file_path)
+    os.makedirs(dir, exist_ok=True)
+    table = group[1][['row', 'col']]
+    table.to_csv(file_path, index=False, header=False)
 
 def add_ground_truth_mark_help(im_path, ground_truth_file_path, hasHeader=False,
                                shape=Shape.CROSS, mark_color=(0, 255, 127, 200), hasProb=False):
@@ -646,11 +704,14 @@ def test_evaluate_global_f1():
 
   threshold = 30
   # implicit 0.5 threshold
-  f1_list, over_detected, non_detected = evaluate_global_f1(pred_dir, ground_true_dir, threshold)
+  f1_list, over_detected, non_detected, FP, TP, FN \
+    = evaluate_global_f1(pred_dir, ground_true_dir, threshold)
   assert np.allclose(f1_list, 0.518918918918919)
 
   # custom threshold
   prob_threshold = 0.6
-  f1_list, over_detected, non_detected = evaluate_global_f1(pred_dir, ground_true_dir, threshold,
-      prob_threshold)
+  f1_list, over_detected, non_detected, FP, TP, FN \
+    = evaluate_global_f1(pred_dir, ground_true_dir, threshold, prob_threshold)
   assert np.allclose(f1_list, 0.5445544554455445)
+
+#test_evaluate_global_f1()

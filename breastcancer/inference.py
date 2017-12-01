@@ -187,6 +187,7 @@ def predict_mitoses_num_locations(model, model_name, threshold, ROI, tile_size=6
   #tiles = (extract_patch(ROI, row, col, tile_size) for row, col in tile_indices)
   tiles = (element[0] for element in gen_patches(ROI, tile_indices, tile_size, rotations=0,
       translations=0, max_shift=0, p=1))
+  #tiles = [ROI]
   mitosis_location_scores = []
   predictions = np.empty((0, 1))
 
