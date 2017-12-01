@@ -496,10 +496,11 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
             save_patch(patch, save_path, lab, case, region, row, col, rot, row_shift, col_shift)
           # regular sampling for normal cases
           # NOTE: This may sample the false-positive patches again, but that's fine for now
-          normal_coords_gen = gen_normal_coords(mask, patch_size, stride, overlap_threshold)
-          patch_gen = gen_patches(im, normal_coords_gen, patch_size, 0, 0, max_shift, p)
-          for patch, row, col, rot, row_shift, col_shift in patch_gen:
-            save_patch(patch, save_path, lab, case, region, row, col, rot, row_shift, col_shift)
+          if p > 0:
+            normal_coords_gen = gen_normal_coords(mask, patch_size, stride, overlap_threshold)
+            patch_gen = gen_patches(im, normal_coords_gen, patch_size, 0, 0, max_shift, p)
+            for patch, row, col, rot, row_shift, col_shift in patch_gen:
+              save_patch(patch, save_path, lab, case, region, row, col, rot, row_shift, col_shift)
 
 
 if __name__ == "__main__":
