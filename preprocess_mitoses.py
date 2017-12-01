@@ -349,7 +349,7 @@ def save_patch(patch, path, lab, case, region, row, col, rotation, row_shift, co
   """
   # lab is a single digit, case and region are two digits with padding if needed
   # TODO: extract filename generation and arg extraction into separate functions
-  filename = f"{lab}_{case}_{region}_{row}_{col}_{rotation}_{row_shift}_{col_shift}{suffix}.{ext}"
+  filename = f"{lab}_{case}_{region}_{row}_{col}_{rotation}_{row_shift}_{col_shift}_{suffix}.{ext}"
   file_path = os.path.join(path, filename)
   # NOTE: the subsampling and quality parameters will only affect jpeg images
   Image.fromarray(patch).save(file_path, subsampling=0, quality=100)
@@ -467,8 +467,8 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
           if not os.path.exists(save_path):
             os.makedirs(save_path)  # create if necessary
           patch_gen = gen_patches(im, coords, patch_size, rotations, translations, max_shift, 1)
-          for patch, row, col, rot, row_shift, col_shift in patch_gen:
-            save_patch(patch, save_path, lab, case, region, row, col, rot, row_shift, col_shift)
+          for i, (patch, row, col, rot, row_shift, col_shift) in enumerate(patch_gen):
+            save_patch(patch, save_path, lab, case, region, row, col, rot, row_shift, col_shift, i)
 
           # normal samples:
           # sample from all possible normal patches
@@ -492,8 +492,8 @@ def preprocess(images_path, labels_path, base_save_path, train_size, patch_size,
             fp_coords = []
           fp_patch_gen = gen_patches(im, fp_coords, patch_size, fp_rotations, fp_translations,
               max_shift, 1)
-          for patch, row, col, rot, row_shift, col_shift in fp_patch_gen:
-            save_patch(patch, save_path, lab, case, region, row, col, rot, row_shift, col_shift)
+          for i, (patch, row, col, rot, row_shift, col_shift) in enumerate(fp_patch_gen):
+            save_patch(patch, save_path, lab, case, region, row, col, rot, row_shift, col_shift, i)
           # regular sampling for normal cases
           # NOTE: This may sample the false-positive patches again, but that's fine for now
           if p > 0:
