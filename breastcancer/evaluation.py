@@ -9,7 +9,7 @@ from PIL import Image
 from breastcancer.visualization import Shape, add_mark
 from sklearn.cluster import DBSCAN
 
-GROUND_TRUTH_FILE_ID_RE = "/\d+/\d+.csv"
+GROUND_TRUTH_FILE_ID_RE = "\d+/\d+.csv"
 
 def prepare_f1_inputs(prediction, ground_truth, threshold=30, file_id=None):
   """ Prepare the input variables (TP, FP, and PN) for computing F1
@@ -140,7 +140,7 @@ def get_file_id(files, file_id_re):
   # the id generated in the above will be like "/12/01.csv". The prefix
   # `/` and suffix '.cvs' need to be removed because this id will be
   # used as the part of file path in other places.
-  id_files_update = {id[1 : len(id) - 4] : file for id, file in id_files.items()}
+  id_files_update = {id[0 : len(id) - 4] : file for id, file in id_files.items()}
   return id_files_update
 
 
@@ -236,7 +236,8 @@ def dbscan_clustering(input_coordinates, eps, min_samples, isWeightedAvg=False):
               for rows, cols, probs in clustered_points]
   return result
 
-def cluster_prediction_result(pred_dir, eps, min_samples, hasHeader, isWeightedAvg=False):
+def cluster_prediction_result(pred_dir, eps, min_samples, hasHeader, isWeightedAvg=False,
+                              prob_threshold=0):
   """ cluster the prediction results to avoid the duplicated
   predictions introduced by the small stride.
 
@@ -256,18 +257,22 @@ def cluster_prediction_result(pred_dir, eps, min_samples, hasHeader, isWeightedA
   pred_files = get_file_id(pred_files, GROUND_TRUTH_FILE_ID_RE)
   for k, pred_file in pred_files.items():
     pred_locations = get_locations_from_csv(pred_file, hasHeader=hasHeader, hasProb=True)
+    
+    
+    pred_locations = [p for p in pred_locations if float(p[2]) > prob_threshold]
 
     # apply dbscan clustering on each prediction file
-    clustered_pred_locations = dbscan_clustering(pred_locations, eps=eps,
-                                                 min_samples=min_samples,
-                                                 isWeightedAvg=isWeightedAvg)
+    if len(pred_locations) > 0:
+        clustered_pred_locations = dbscan_clustering(pred_locations, eps=eps,
+                                                     min_samples=min_samples,
+                                                     isWeightedAvg=isWeightedAvg)
 
-    # save the prediction results
-    clustered_file_name = pred_file.replace(k, f"clustered_{k}")
-    df = pd.DataFrame(clustered_pred_locations, columns=['row', 'col', 'avg_prob'])
-    dir = os.path.dirname(clustered_file_name)
-    os.makedirs(dir, exist_ok=True)
-    df.to_csv(clustered_file_name, index=False)
+        # save the prediction results
+        clustered_file_name = pred_file.replace(k, f"clustered_{k}")
+        df = pd.DataFrame(clustered_pred_locations, columns=['row', 'col', 'avg_prob'])
+        dir = os.path.dirname(clustered_file_name)
+        os.makedirs(dir, exist_ok=True)
+        df.to_csv(clustered_file_name, index=False)
 
 
 def evaluate_f1(pred_dir, ground_true_dir, threshold=30, prob_threshold=None):
@@ -422,6 +427,7 @@ def export_single_F1_input(output_dir, f1_parameter, f1_parameter_name):
     os.makedirs(dir, exist_ok=True)
     table = group[1][['row', 'col']]
     table.to_csv(file_path, index=False, header=False)
+
 
 def add_ground_truth_mark_help(im_path, ground_truth_file_path, hasHeader=False,
                                shape=Shape.CROSS, mark_color=(0, 255, 127, 200), hasProb=False):
@@ -713,5 +719,3 @@ def test_evaluate_global_f1():
   f1_list, over_detected, non_detected, FP, TP, FN \
     = evaluate_global_f1(pred_dir, ground_true_dir, threshold, prob_threshold)
   assert np.allclose(f1_list, 0.5445544554455445)
-
-#test_evaluate_global_f1()
