@@ -9,7 +9,7 @@ from PIL import Image
 from breastcancer.visualization import Shape, add_mark
 from sklearn.cluster import DBSCAN
 
-GROUND_TRUTH_FILE_ID_RE = "\d+/\d+.csv"
+GROUND_TRUTH_FILE_ID_RE = "(\d+/\d+)[.csv|.tif]"
 
 def prepare_f1_inputs(prediction, ground_truth, threshold=30, file_id=None):
   """ Prepare the input variables (TP, FP, and PN) for computing F1
@@ -136,12 +136,7 @@ def get_file_id(files, file_id_re):
     a dictionary of file id and its full file path
   """
   id_files = {re.findall(file_id_re, x)[0]: x for x in files}
-
-  # the id generated in the above will be like "/12/01.csv". The prefix
-  # `/` and suffix '.cvs' need to be removed because this id will be
-  # used as the part of file path in other places.
-  id_files_update = {id[0 : len(id) - 4] : file for id, file in id_files.items()}
-  return id_files_update
+  return id_files
 
 
 def get_locations_from_csv(file, hasHeader=False, hasProb=True):
