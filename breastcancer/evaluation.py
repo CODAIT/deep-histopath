@@ -7,7 +7,6 @@ from pathlib import Path
 import re, os
 from PIL import Image
 from breastcancer.visualization import Shape, add_mark
-from sklearn.cluster import DBSCAN
 
 GROUND_TRUTH_FILE_ID_RE = "(\d+/\d+)[.csv|.tif]"
 
@@ -187,87 +186,6 @@ def get_data_from_csv(file, hasHeader=False):
     data = pd.read_csv(file, header=None)
 
   return data.values.tolist()
-
-def dbscan_clustering(input_coordinates, eps, min_samples, isWeightedAvg=False):
-  """ cluster the prediction results by dbscan. It could avoid the
-  duplicated predictions caused by the small stride.
-
-  Args:
-    input_coordinates: the prediction coordinates, e.g. [(r0, c0, p0), (r1,
-     c1, p1), (r2, c2, p2), ...].
-    eps: maximum distance between two samples for them to be considered
-     as in the same neighborhood.
-    min_samples: number of samples (or total weight) in a neighborhood
-     for a point to be considered as a core point.
-    isWeightedAvg: boolean value to indicate if add the prediction
-     probabilities as  the weight to compute the averaged coordinates of
-     each cluster.
-
-  Return:
-    a list of average coordinates for each cluster
-  """
-  input_coordinates_without_probability = [(t[0], t[1]) for t in input_coordinates]
-  db = DBSCAN(eps=eps, min_samples=min_samples).fit(input_coordinates_without_probability)
-  labels = db.labels_
-  unique_labels = set(labels)
-  clustered_points = [[[], [], []] for _ in unique_labels] # store the coordinates for each cluster
-
-  # collect the coordinates for each cluster
-  for i in range(0, len(input_coordinates)):
-    label = labels[i]
-    r, c, p = input_coordinates[i]
-    clustered_points[label][0].append(r)
-    clustered_points[label][1].append(c)
-    clustered_points[label][2].append(p)
-
-  # average the weighted coordinates for each cluster
-  if isWeightedAvg:
-    result = [(int(np.sum(np.array(rows) * np.array(probs)) / sum(probs)),
-               int(np.sum(np.array(cols) * np.array(probs)) / sum(probs)),
-               np.mean(probs))
-              for rows, cols, probs in clustered_points]
-  else:
-    result = [(int(np.mean(rows)), int(np.mean(cols)), np.mean(probs))
-              for rows, cols, probs in clustered_points]
-  return result
-
-def cluster_prediction_result(pred_dir, eps, min_samples, hasHeader, isWeightedAvg=False,
-                              prob_threshold=0):
-  """ cluster the prediction results to avoid the duplicated
-  predictions introduced by the small stride.
-
-  Args:
-    pred_dir: directory for the prediction result
-    eps: maximum distance between two samples for them to be considered
-     as in the same neighborhood.
-    min_samples: number of samples (or total weight) in a neighborhood
-     for a point to be considered as a core point.
-    hasHeader: boolean value to indicate if the csv file has the header
-    isWeightedAvg: boolean value to indicate if add the prediction.
-     probabilities as  the weight to compute the averaged coordinates of
-     each cluster.
-  """
-
-  pred_files = list_files(pred_dir, "*.csv")
-  pred_files = get_file_id(pred_files, GROUND_TRUTH_FILE_ID_RE)
-  for k, pred_file in pred_files.items():
-    pred_locations = get_locations_from_csv(pred_file, hasHeader=hasHeader, hasProb=True)
-    
-    
-    pred_locations = [p for p in pred_locations if float(p[2]) > prob_threshold]
-
-    # apply dbscan clustering on each prediction file
-    if len(pred_locations) > 0:
-        clustered_pred_locations = dbscan_clustering(pred_locations, eps=eps,
-                                                     min_samples=min_samples,
-                                                     isWeightedAvg=isWeightedAvg)
-
-        # save the prediction results
-        clustered_file_name = pred_file.replace(k, f"clustered_{k}")
-        df = pd.DataFrame(clustered_pred_locations, columns=['row', 'col', 'avg_prob'])
-        dir = os.path.dirname(clustered_file_name)
-        os.makedirs(dir, exist_ok=True)
-        df.to_csv(clustered_file_name, index=False)
 
 
 def evaluate_f1(pred_dir, ground_true_dir, threshold=30, prob_threshold=None):

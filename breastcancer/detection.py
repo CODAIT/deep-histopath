@@ -6,9 +6,11 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 import tensorflow as tf
+from sklearn.cluster import DBSCAN
 
 from breastcancer.evaluation import list_files, get_file_id, get_locations_from_csv
 from breastcancer.evaluation import GROUND_TRUTH_FILE_ID_RE
+
 
 
 def ijv_2_arr(ijv, h, w):
@@ -44,6 +46,54 @@ def arr_2_ijv(arr):
   ijv = np.vstack((r, c, arr[r,c])).T  # row, col, prob
   return ijv
 
+
+def csv_2_arr(csv_file, h, w, hasHeader):
+  """Convert a csv file with the columns (row,col,val) to a 2D array in
+  which [row,col] = val.
+
+  Args:
+    csv_file: csv file path.
+    h: The number of rows in the resulting array.
+    w: The number of columns in the resulting array.
+    hasHeader: boolean value to indicate if the input csv file have a
+      header.
+
+  Returns:
+    A 2D NumPy array of shape (h, w) in which [row,col] = val.
+  """
+
+  points = get_locations_from_csv(csv_file, hasHeader=hasHeader, hasProb=True)
+  points = np.asarray(points)
+  return ijv_2_arr(points, h, w)
+
+
+def arr_2_csv(arr, csv_file, columns={'row', 'col', 'prob'}):
+  """Save a 2D array in which [row,col] = val to a csv file
+
+  Args:
+    arr: A 2D NumPy array of shape (h, w) in which [row,col] = val.
+    csv_file: output csv file path.
+    columns: column names for the csv file
+  """
+
+  # convert array to a list of tuples
+  pred_tuples = arr_2_ijv(arr)
+
+  tuple_2_csv(pred_tuples, csv_file, columns)
+
+def tuple_2_csv(tuple_list, csv_file, columns={'row', 'col', 'prob'}):
+  """Save a list of tuples to a csv file
+
+  Args:
+    arr: A 2D NumPy array of shape (h, w) in which [row,col] = val.
+    csv_file: output csv file path.
+    columns: column names for the csv file
+  """
+
+  df = pd.DataFrame(tuple_list, columns=columns)
+  dir = os.path.dirname(csv_file)
+  os.makedirs(dir, exist_ok=True)
+  df.to_csv(csv_file, index=False)
 
 def disk_kernel(radius):
   """Create a disk kernel.
@@ -118,27 +168,19 @@ def smooth_prediction_results(pred_dir, img_dir, radius, hasHeader):
 
   with tf.Session() as sess:
     for k, pred_file in pred_files.items():
-      # TODO: use new `csv_2_arr` function
-      preds = np.array(get_locations_from_csv(pred_file, hasHeader=hasHeader, hasProb=True))
-
       # convert ijv predictions to prob maps
       img_file = img_files[k]
       h, w = Image.open(img_file).size
-      probs = ijv_2_arr(preds, h, w)
+      probs = csv_2_arr(pred_file, h, w, hasHeader=hasHeader)
 
       # smooth the probability maps
       probs_smooth = sess.run(probs_smooth_tf, feed_dict={probs_tf: probs})
 
-      # convert smoothed prob map back to ijv predictions
-      preds_smooth = arr_2_ijv(probs_smooth)
-
       # save the prediction results
       smooth_dir = os.path.dirname(pred_dir + "/") + "_smoothed"
       smooth_file_name = pred_file.replace(pred_dir, smooth_dir)
-      df = pd.DataFrame(preds_smooth, columns=['row', 'col', 'prob'])
-      dir = os.path.dirname(smooth_file_name)
-      os.makedirs(dir, exist_ok=True)
-      df.to_csv(smooth_file_name, index=False)
+
+      arr_2_csv(probs_smooth, smooth_file_name)
 
 
 def identify_mitoses(probs, radius, prob_thresh):
@@ -212,13 +254,10 @@ def detect_prediction_results(pred_dir, img_dir, radius, prob_thresh, hasHeader)
   img_files = get_file_id(img_files, GROUND_TRUTH_FILE_ID_RE)
 
   for k, pred_file in pred_files.items():
-    # TODO: use new `csv_2_arr` function
-    preds = np.array(get_locations_from_csv(pred_file, hasHeader=hasHeader, hasProb=True))
-
     # convert ijv predictions to prob maps
     img_file = img_files[k]
     h, w = Image.open(img_file).size
-    probs = ijv_2_arr(preds, h, w)
+    probs = csv_2_arr(pred_file, h, w, hasHeader=hasHeader)
 
     # detect the centers of the mitoses
     preds_detected = identify_mitoses(probs, radius, prob_thresh)
@@ -226,8 +265,99 @@ def detect_prediction_results(pred_dir, img_dir, radius, prob_thresh, hasHeader)
     # save the prediction results
     detected_dir = os.path.dirname(pred_dir + "/") + "_detected"
     detected_file_name = pred_file.replace(pred_dir, detected_dir)
-    df = pd.DataFrame(preds_detected, columns=['row', 'col', 'prob'])
-    dir = os.path.dirname(detected_file_name)
-    os.makedirs(dir, exist_ok=True)
-    df.to_csv(detected_file_name, index=False)
 
+    tuple_2_csv(preds_detected, detected_file_name, columns={'row', 'col', 'prob'})
+
+
+def dbscan_clustering(input_coordinates, eps, min_samples, isWeightedAvg=False):
+  """ cluster the prediction results by dbscan. It could avoid the
+  duplicated predictions caused by the small stride.
+
+  Args:
+    input_coordinates: the prediction coordinates, e.g. [(r0, c0, p0), (r1,
+     c1, p1), (r2, c2, p2), ...].
+    eps: maximum distance between two samples for them to be considered
+     as in the same neighborhood.
+    min_samples: number of samples (or total weight) in a neighborhood
+     for a point to be considered as a core point.
+    isWeightedAvg: boolean value to indicate if add the prediction
+     probabilities as  the weight to compute the averaged coordinates of
+     each cluster.
+
+  Return:
+    a list of averaged (r, c, prob) tuples for each cluster
+  """
+  input_coordinates_without_probability = [(t[0], t[1]) for t in input_coordinates]
+  db = DBSCAN(eps=eps, min_samples=min_samples).fit(input_coordinates_without_probability)
+  labels = db.labels_
+  unique_labels = set(labels)
+  clustered_points = [[[], [], []] for _ in unique_labels]  # store the coordinates for each cluster
+
+  # collect the coordinates for each cluster
+  for i in range(0, len(input_coordinates)):
+    label = labels[i]
+    r, c, p = input_coordinates[i]
+    clustered_points[label][0].append(r)
+    clustered_points[label][1].append(c)
+    clustered_points[label][2].append(p)
+
+  # average the weighted coordinates for each cluster
+  if isWeightedAvg:
+    result = [(int(np.sum(np.array(rows) * np.array(probs)) / sum(probs)),
+               int(np.sum(np.array(cols) * np.array(probs)) / sum(probs)),
+               np.mean(probs))
+              for rows, cols, probs in clustered_points]
+  else:
+    result = [(int(np.mean(rows)), int(np.mean(cols)), np.mean(probs))
+              for rows, cols, probs in clustered_points]
+  return result
+
+
+def cluster_prediction_result(pred_dir, eps, min_samples, hasHeader, isWeightedAvg=False,
+                              prob_threshold=0):
+  """ cluster the prediction results to avoid the duplicated
+  predictions introduced by the small stride.
+
+  Args:
+    pred_dir: directory for the prediction result
+    eps: maximum distance between two samples for them to be considered
+     as in the same neighborhood.
+    min_samples: number of samples (or total weight) in a neighborhood
+     for a point to be considered as a core point.
+    hasHeader: boolean value to indicate if the csv file has the header
+    isWeightedAvg: boolean value to indicate if add the prediction.
+     probabilities as  the weight to compute the averaged coordinates of
+     each cluster.
+  """
+
+  pred_files = list_files(pred_dir, "*.csv")
+  pred_files = get_file_id(pred_files, GROUND_TRUTH_FILE_ID_RE)
+  for k, pred_file in pred_files.items():
+    pred_locations = get_locations_from_csv(pred_file, hasHeader=hasHeader, hasProb=True)
+
+    pred_locations = [p for p in pred_locations if float(p[2]) > prob_threshold]
+
+    # apply dbscan clustering on each prediction file
+    if len(pred_locations) > 0:
+      clustered_pred_locations = dbscan_clustering(pred_locations, eps=eps,
+                                                   min_samples=min_samples,
+                                                   isWeightedAvg=isWeightedAvg)
+
+      # save the prediction results
+      clustered_dir = os.path.dirname(pred_dir + "/") + "_clustered"
+      clustered_file_name = pred_file.replace(pred_dir, clustered_dir)
+
+      tuple_2_csv(clustered_pred_locations, clustered_file_name, columns={'row', 'col', 'avg_prob'})
+
+
+def test_array_csv(tmpdir):
+  width = 500
+  height = 500
+  arr_input = np.random.ranf([height, width])
+  csv_file = os.path.join(tmpdir, "test.csv")
+
+  # array -> csv -> array
+  arr_2_csv(arr_input, csv_file)
+  array_output = csv_2_arr(csv_file, height, width, True)
+
+  assert np.allclose(arr_input, array_output)
