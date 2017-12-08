@@ -44,7 +44,7 @@ def evaluate(patches_path, patch_size, batch_size, model, model_name, prob_thres
   # data
   with tf.name_scope("data"):
     dataset = create_dataset(patches_path, model_name, patch_size, batch_size, False, False,
-        marginalization, threads, prefetch_batches, None)
+        marginalization, False, threads, prefetch_batches, None)
 
     iterator = tf.data.Iterator.from_structure(dataset.output_types, dataset.output_shapes)
     data_init_op = iterator.make_initializer(dataset)

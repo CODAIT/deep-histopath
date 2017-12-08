@@ -229,18 +229,15 @@ def marginalize(x):
   return x
 
 
-def create_dataset(path, model_name, patch_size, batch_size, shuffle, augmentation, marginalization,
-    threads, prefetch_batches, seed=None):
-  """Create a dataset.
+def process_dataset(dataset, model_name, patch_size, augmentation, marginalization, threads,
+    seed=None):
+  """Process a Dataset.
 
   Args:
-    path: String path to the generated validation image patches.
-      This should contain folders for each class.
+    dataset: Dataset of filenames.
     model_name: String indicating the model to use.
     patch_size: Integer length to which the square patches will be
       resized.
-    batch_size: Integer training batch size.
-    shuffle: Boolean for whether or not to shuffle filenames.
     augmentation: Boolean for whether or not to apply random augmentation
       to the images.
     marginalization: Boolean for whether or not to use noise
@@ -252,19 +249,12 @@ def create_dataset(path, model_name, patch_size, batch_size, shuffle, augmentati
       `batch_size` must be divisible by 4, or equal to 1 for a special
       debugging case of no augmentation.
     threads: Integer number of threads for dataset buffering.
-    prefetch_batches: Integer number of batches to prefetch.
     seed: Integer random seed.
 
   Returns:
-    A Dataset object.
+    A labeled Dataset of augmented, normalized images, possibly with
+    marginalization.
   """
-  # read & process images
-  #dataset = tf.data.Dataset.list_files(os.path.join(path, "*", "*.{png,jpg}"))  # not supported
-  dataset = tf.data.Dataset.list_files(os.path.join(path, "*", "*.png"))
-
-  if shuffle:
-    dataset = dataset.shuffle(500000)
-
   dataset = dataset.map(lambda filename: preprocess(filename, patch_size),
       num_parallel_calls=threads)
 
@@ -285,9 +275,76 @@ def create_dataset(path, model_name, patch_size, batch_size, shuffle, augmentati
   dataset = dataset.map(lambda image, label, filename:
     (normalize(image, model_name), label, filename), num_parallel_calls=threads)
 
-  # batch if necessary
-  if not marginalization:
+  return dataset
+
+
+def create_dataset(path, model_name, patch_size, batch_size, shuffle, augmentation, marginalization,
+    oversampling, threads, prefetch_batches, seed=None):
+  """Create a dataset.
+
+  Args:
+    path: String path to the generated validation image patches.
+      This should contain folders for each class.
+    model_name: String indicating the model to use.
+    patch_size: Integer length to which the square patches will be
+      resized.
+    batch_size: Integer training batch size.
+    shuffle: Boolean for whether or not to shuffle filenames.
+    augmentation: Boolean for whether or not to apply random augmentation
+      to the images.
+    marginalization: Boolean for whether or not to use noise
+      marginalization when evaluating the validation set.  If True, then
+      each image in the validation set will be expanded to a batch of
+      augmented versions of that image, and predicted probabilities for
+      each batch will be averaged to yield a single noise-marginalized
+      prediction for each image.  Note: if this is True, then
+      `batch_size` must be divisible by 4, or equal to 1 for a special
+      debugging case of no augmentation.
+    oversampling: Boolean for whether or not to oversample the minority
+      mitosis class via class-aware sampling.  Not compatible with
+      marginalization.
+    threads: Integer number of threads for dataset buffering.
+    prefetch_batches: Integer number of batches to prefetch.
+    seed: Integer random seed.
+
+  Returns:
+    A Dataset object.
+  """
+  # read & process images
+  if oversampling:
+    # oversample the minority mitosis class via class-aware sampling, in which we sample the mitosis
+    # and normal samples separately in order to yield class-balanced mini-batches.
+    mitosis_dataset = tf.data.Dataset.list_files(os.path.join(path, "mitosis", "*.png"))
+    normal_dataset = tf.data.Dataset.list_files(os.path.join(path, "normal", "*.png"))
+
+    # zipping will stop once the normal dataset is empty
+    mitosis_dataset = mitosis_dataset.repeat(-1).shuffle(int(1e6))
+    normal_dataset = normal_dataset.shuffle(int(1e6))
+
+    mitosis_dataset = process_dataset(mitosis_dataset, model_name, patch_size, augmentation, False,
+        threads, seed)
+    normal_dataset = process_dataset(normal_dataset, model_name, patch_size, augmentation, False,
+        threads, seed)
+
+    # zip together the datasets, then flatten and batch so that each mini-batch contains an even
+    # number of mitosis and normal samples
+    dataset = tf.data.Dataset.zip((mitosis_dataset, normal_dataset))
+    dataset = dataset.flat_map(lambda mitosis, normal:
+        tf.data.Dataset.from_tensors(mitosis).concatenate(tf.data.Dataset.from_tensors(normal)))
     dataset = dataset.batch(batch_size)
+
+  else:
+    dataset = tf.data.Dataset.list_files(os.path.join(path, "*", "*.png"))
+
+    if shuffle:
+      dataset = dataset.shuffle(int(1e7))
+
+    dataset = process_dataset(dataset, model_name, patch_size, augmentation, marginalization,
+        threads, seed)
+
+    # batch if necessary
+    if not marginalization:
+      dataset = dataset.batch(batch_size)
 
   # prefetch
   dataset = dataset.prefetch(prefetch_batches)
@@ -547,8 +604,8 @@ def initialize_variables(sess):
 
 def train(train_path, val_path, exp_path, model_name, model_weights, patch_size, train_batch_size,
     val_batch_size, clf_epochs, finetune_epochs, clf_lr, finetune_lr, finetune_momentum,
-    finetune_layers, l2, augmentation, marginalization, threads, prefetch_batches, log_interval,
-    checkpoint, resume, seed):
+    finetune_layers, l2, augmentation, marginalization, oversampling, threads, prefetch_batches,
+    log_interval, checkpoint, resume, seed):
   """Train a model.
 
   Args:
@@ -587,6 +644,8 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
       prediction for each image.  Note: if this is True, then
       `val_batch_size` must be divisible by 4, or equal to 1 for a
       special debugging case of no augmentation.
+    oversampling: Boolean for whether or not to oversample the minority
+      mitosis class via class-aware sampling.
     threads: Integer number of threads for dataset buffering.
     prefetch_batches: Integer number of batches to prefetch.
     log_interval: Integer number of steps between logging during
@@ -615,10 +674,11 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
 
   # data
   with tf.name_scope("data"):
+    # NOTE: seed issues to be fixed in tf
     train_dataset = create_dataset(train_path, model_name, patch_size, train_batch_size, True,
-        augmentation, False, threads, prefetch_batches)  #, seed)  # seed issues to be fixed in tf
+        augmentation, False, oversampling, threads, prefetch_batches)  #, seed)
     val_dataset = create_dataset(val_path, model_name, patch_size, val_batch_size, False, False,
-        marginalization, threads, prefetch_batches)  #, seed)  # seed issues to be fixed in tf
+        marginalization, False, threads, prefetch_batches)  #, seed)
 
     iterator = tf.data.Iterator.from_structure(train_dataset.output_types,
                                                        train_dataset.output_shapes)
@@ -923,6 +983,9 @@ def main(args=None):
       help="use noise marginalization when evaluating the validation set. if this is set, then "\
            "the validation batch_size must be divisible by 4, or equal to 1 for no augmentation "\
            "(default: %(default)s)")
+  parser.add_argument("--oversample", default=False, action="store_true",
+      help="oversample the minority mitosis class during training via class-aware sampling "\
+           "(default: %(default)s)")
   parser.add_argument("--threads", type=int, default=5,
       help="number of threads for dataset parallel processing; note: this will cause "\
            "non-reproducibility (default: %(default)s)")
@@ -982,8 +1045,8 @@ def main(args=None):
       clf_epochs=args.clf_epochs, finetune_epochs=args.finetune_epochs, clf_lr=args.clf_lr,
       finetune_lr=args.finetune_lr, finetune_momentum=args.finetune_momentum,
       finetune_layers=args.finetune_layers, l2=args.l2, augmentation=args.augment,
-      marginalization=args.marginalize, threads=args.threads,
-      prefetch_batches=args.prefetch_batches, log_interval=args.log_interval,
+      marginalization=args.marginalize, oversampling=args.oversample,
+      threads=args.threads, prefetch_batches=args.prefetch_batches, log_interval=args.log_interval,
       checkpoint=args.checkpoint, resume=args.resume, seed=args.seed)
 
 

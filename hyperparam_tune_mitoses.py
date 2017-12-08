@@ -59,6 +59,9 @@ def main(args=None):
       help="use noise marginalization when evaluating the validation set. if this is set, then "\
            "the validation batch_size must be divisible by 4, or equal to 1 for no augmentation "\
            "(default: %(default)s)")
+  parser.add_argument("--oversample", default=False, action="store_true",
+      help="oversample the minority mitosis class during training via class-aware sampling "\
+           "(default: %(default)s)")
   parser.add_argument("--threads", type=int, default=5,
       help="number of threads for dataset parallel processing; note: this will cause "\
            "non-reproducibility for values > 1 (default: %(default)s)")
@@ -122,6 +125,9 @@ def main(args=None):
 
     if args.marginalize:
       train_args.append("--marginalize")
+
+    if args.oversample:
+      train_args.append("--oversample")
 
     train_args.append(f"--threads={args.threads}")
 
