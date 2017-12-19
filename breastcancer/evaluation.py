@@ -8,7 +8,7 @@ import re, os
 from PIL import Image
 from breastcancer.visualization import Shape, add_mark
 
-GROUND_TRUTH_FILE_ID_RE = "(\d+/\d+)[.csv|.tif]"
+GROUND_TRUTH_FILE_ID_RE = "(\d+/\d+)[.csv|.tif|_mark.tif|_mask.tif]"
 
 def prepare_f1_inputs(prediction, ground_truth, threshold=30, file_id=None):
   """ Prepare the input variables (TP, FP, and PN) for computing F1
@@ -28,7 +28,7 @@ def prepare_f1_inputs(prediction, ground_truth, threshold=30, file_id=None):
     ground_truth: groud truth data, a list of point locations, e.g.
       [(r0, c0), (r1, c1), (r2, c2), ...].
     threshold: Eucledian distance to see if the predict and ground truth
-      points are at the same circle.
+      points are in the same circle.
 
   Return:
     A tuple of (FP, TP, FN), where TP will be a list of list of tuples like
@@ -97,17 +97,17 @@ def compute_f1(FP, TP, FN):
     FN: a list of false negative predictions.
 
   Return:
-    F1 score.
+    a tuple of (F1, precision, recall).
   """
 
   precision = len(TP) / (len(TP) + len(FP)) if len(TP) + len(FP) > 0 else 0
   recall = len(TP) / (len(TP) + len(FN)) if len(TP) + len(FN) > 0 else 0
   f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
 
-  print (f"TP: {len(TP)}; FP: {len(FP)}; FN: {len(FN)}")
-  print (f"precision: {precision}; recall: {recall}")
+  #print (f"TP: {len(TP)}; FP: {len(FP)}; FN: {len(FN)}")
+  #print (f"precision: {precision}; recall: {recall}")
 
-  return f1
+  return (f1, precision, recall)
 
 def list_files(dir, file_suffix):
   """ recursively list all the files that have the same input file
@@ -225,7 +225,7 @@ def evaluate_f1(pred_dir, ground_true_dir, threshold=30, prob_threshold=None):
 
     ground_true_locations = get_locations_from_csv(ground_true_file, hasHeader=False, hasProb=False)
     FP, TP, FN = prepare_f1_inputs(pred_locations, ground_true_locations, threshold, file_id=key)
-    f1 = compute_f1(FP, TP, FN)
+    f1, precision, recall = compute_f1(FP, TP, FN)
     f1_list.append([f"{key}-{len(ground_true_locations)}-{len(pred_locations)}", f1])
 
     # record the image IDs that the model detected but not in the ground truth
@@ -291,8 +291,32 @@ def evaluate_global_f1(pred_dir, ground_true_dir, threshold=30, prob_threshold=N
     if ground_true_file is None:
       over_detected.append(pred_file)
 
-  f1 = compute_f1(FP_list, TP_list, FN_list)
-  return (f1, over_detected, non_detected, FP_list, TP_list, FN_list)
+  f1, precision, recall = compute_f1(FP_list, TP_list, FN_list)
+  return (f1, precision, recall, over_detected, non_detected, FP_list, TP_list, FN_list)
+
+
+def search_prob_threshold_for_f1(prob_thresholds, pred_dir, ground_truth_dir, dist_threshold=30):
+  """ Search the best probability threshold for F1
+
+  Args:
+    prob_thresholds: a list of probability thresholds
+    pred_dir: the directory for the prediction csv files
+    ground_truth_dir: the directory for the ground truth files
+    dist_threshold: Eucledian distance to see if the predict and ground truth
+      points are at the same circle.
+
+  Return:
+    a data frame, each row of which will be ('prob_threshold', 'f1', 'precision', 'recall')
+  """
+  result = []
+  for prob_threshold in prob_thresholds:
+    f1, precision, recall, \
+    over_detected, non_detected, \
+    FP, TP, FN = evaluate_global_f1(pred_dir, ground_truth_dir, dist_threshold, prob_threshold)
+    result.append((prob_threshold, f1, precision, recall))
+
+  df = pd.DataFrame(result, columns=['prob_threshold', 'f1', 'precision', 'recall'])
+  return df
 
 def export_F1_inputs_TP_FP_FN(output_path, FP, TP, FN):
   """ Export TP, FP, FN predictions into a single csv file
@@ -409,42 +433,42 @@ def test_compute_f1():
   predict1 = [(10, 10), (20, 30), (30, 60), (100, 53), (32, 26), (120, 66)]
   ground_true1 = [(10, 10), (20, 30), (30, 60), (100, 53), (32, 26), (120, 66)]
   FP, TP, FN = prepare_f1_inputs(predict1, ground_true1, threshold)
-  f1 = compute_f1(FP, TP, FN)
+  f1, precision, recall = compute_f1(FP, TP, FN)
   assert f1 == 1
 
   # test case 2: the prediction result is totally different from the ground truth
   predict2 = [(10, 10), (2, 3), (3, 6), (10, 5), (3, 2), (12, 6)]
   ground_true2 = [(100, 100), (200, 300), (300, 600), (1000, 530), (320, 260), (1200, 660)]
   FP, TP, FN = prepare_f1_inputs(predict2, ground_true2, threshold)
-  f1 = compute_f1(FP, TP, FN)
+  f1, precision, recall = compute_f1(FP, TP, FN)
   assert f1 == 0
 
   # test case 3: the prediction result partially matches the ground truth
   predict3 = [(2, 3), (50, 180), (66, 20), (80, 70), (100, 200), (300, 400)]
   ground_true3 = [(10, 10), (40, 50), (50, 200), (60, 110), (70, 10), (80, 80)]
   FP, TP, FN = prepare_f1_inputs(predict3, ground_true3, threshold)
-  f1 = compute_f1(FP, TP, FN)
+  f1, precision, recall = compute_f1(FP, TP, FN)
   assert f1 == 2/3
 
   # test case 4: ground truth but no predictions
   predict4 = []
   ground_true4 = [(10, 10), (40, 50), (50, 200), (60, 110), (70, 10), (80, 80)]
   FP, TP, FN = prepare_f1_inputs(predict4, ground_true4, threshold)
-  f1 = compute_f1(FP, TP, FN)
+  f1, precision, recall = compute_f1(FP, TP, FN)
   assert f1 == 0
 
   # test case 5: prediction but not ground truth
   predict5 = [(2, 3), (50, 180), (66, 20), (80, 70), (100, 200), (300, 400)]
   ground_true5 = []
   FP, TP, FN = prepare_f1_inputs(predict5, ground_true5, threshold)
-  f1 = compute_f1(FP, TP, FN)
+  f1, precision, recall = compute_f1(FP, TP, FN)
   assert f1 == 0
 
   # test case 6: no prediction but also no ground truth
   predict6 = []
   ground_true6 = []
   FP, TP, FN = prepare_f1_inputs(predict6, ground_true6, threshold)
-  f1 = compute_f1(FP, TP, FN)
+  f1, precision, recall = compute_f1(FP, TP, FN)
   assert f1 == 0
 
 

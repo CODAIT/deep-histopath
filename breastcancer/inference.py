@@ -374,7 +374,7 @@ def predict_mitoses_help(model_file, model_name, index, file_partition,
         save_array_2_image(mask_path, mask)
         # add the detected mitoses into the original image
         im_ROI = Image.fromarray(ROI)
-        add_mark(im_ROI, mitosis_location_list, Shape.SQUARE)
+        #add_mark(im_ROI, mitosis_location_list, Shape.SQUARE)
         im_ROI.save(pred_mark_ROI_path)
 
   return result

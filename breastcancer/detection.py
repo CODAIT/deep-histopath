@@ -344,7 +344,7 @@ def cluster_prediction_result(pred_dir, eps, min_samples, hasHeader, isWeightedA
                                                    isWeightedAvg=isWeightedAvg)
 
       # save the prediction results
-      clustered_dir = os.path.dirname(pred_dir + "/") + "_clustered"
+      clustered_dir = os.path.dirname(pred_dir + "/") + "_clustered/"
       clustered_file_name = pred_file.replace(pred_dir, clustered_dir)
 
       tuple_2_csv(clustered_pred_locations, clustered_file_name, columns={'row', 'col', 'avg_prob'})

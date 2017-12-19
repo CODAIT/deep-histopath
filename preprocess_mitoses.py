@@ -29,7 +29,7 @@ def create_mask(h, w, coords, size):
     mitosis patches are located.
   """
   # check that row, col, and size are within the image bounds
-  assert 1 < size <= min(h, w), "size must be >1 and within the bounds of the image"
+  #assert 1 < size <= min(h, w), "size must be >1 and within the bounds of the image"
 
   # create mitosis patch mask
   mask = np.zeros((h, w), dtype=np.bool)
@@ -77,7 +77,7 @@ def extract_patch(im, row, col, size):
   h, w = im.shape[0:2]
   assert 0 <= row <= h, "row is outside of the image height"
   assert 0 <= col <= w, "col is outside of the image width"
-  assert 1 < size <= min(h, w), "size must be >1 and within the bounds of the image"
+  #assert 1 < size <= min(h, w), "size must be >1 and within the bounds of the image"
 
   # (row, col) is the center, so compute upper and lower bounds of patch
   half_size = round(size / 2)
@@ -300,7 +300,7 @@ def gen_patches(im, coords, size, rotations, translations, max_shift, p):
   bounding_size = math.ceil((size+2*max_shift) * (math.cos(rads) + math.sin(rads)))
   row_center = col_center = round(bounding_size / 2)
   # TODO: either emit a warning, or add a parameter to allow empty corners
-  assert bounding_size < min(h, w), "patch size is too large to avoid empty corners after rotation"
+  #assert bounding_size < min(h, w), "patch size is too large to avoid empty corners after rotation"
 
   for row, col in coords:
     bounding_patch = Image.fromarray(extract_patch(im, row, col, bounding_size))  # PIL for rotation
