@@ -148,6 +148,7 @@ def augment(image, seed=None):
   # NOTE: these values currently come from the Google pathology paper:
   # Liu Y, Gadepalli K, Norouzi M, Dahl GE, Kohlberger T, Boyko A, et al.
   # Detecting Cancer Metastases on Gigapixel Pathology Images. arXiv.org. 2017.
+  # TODO: convert these hardcoded values into hyperparameters
   # NOTE: if the seed is None, these ops will be seeded with a completely random seed, rather than
   # a deterministic one based on the graph seed. This appears to only happen within the map
   # functions of the Dataset API, based on the `test_num_parallel_calls` and
@@ -328,6 +329,9 @@ def create_dataset(path, model_name, patch_size, batch_size, shuffle, augmentati
 
     # zip together the datasets, then flatten and batch so that each mini-batch contains an even
     # number of mitosis and normal samples
+    # NOTE: the number of elements in the zipped dataset is limited to the lesser of the mitosis and
+    # normal datasets, and since the mitosis dataset is set to repeat indefinitely, this zipped
+    # dataset will be limited to the number of normal samples
     dataset = tf.data.Dataset.zip((mitosis_dataset, normal_dataset))
     dataset = dataset.flat_map(lambda mitosis, normal:
         tf.data.Dataset.from_tensors(mitosis).concatenate(tf.data.Dataset.from_tensors(normal)))
@@ -677,11 +681,11 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
     # NOTE: seed issues to be fixed in tf
     train_dataset = create_dataset(train_path, model_name, patch_size, train_batch_size, True,
         augmentation, False, oversampling, threads, prefetch_batches)  #, seed)
-    val_dataset = create_dataset(val_path, model_name, patch_size, val_batch_size, False, False,
-        marginalization, False, threads, prefetch_batches)  #, seed)
+    val_dataset = create_dataset(val_path, model_name, patch_size, val_batch_size, False,
+        False, marginalization, False, threads, prefetch_batches)  #, seed)
 
     iterator = tf.data.Iterator.from_structure(train_dataset.output_types,
-                                                       train_dataset.output_shapes)
+                                               train_dataset.output_shapes)
     train_init_op = iterator.make_initializer(train_dataset)
     val_init_op = iterator.make_initializer(val_dataset)
     images, labels, filenames = iterator.get_next()
@@ -857,7 +861,7 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
       global_epoch += 1  # start next epoch
 
   # TODO: extract this into a function with tests
-  # new classifier layers + fine-tuning combined training loop
+  # training loop for new classifier layers and fine-tuning
   for train_op, epochs in [(clf_train_op, clf_epochs), (finetune_train_op, finetune_epochs)]:
     for _ in range(global_epoch, global_epoch+epochs):  # allow for resuming of training
       # training
