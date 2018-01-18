@@ -162,6 +162,12 @@ def augment(image, seed=None):
   # same.  The desired behavior would be to seed these ops once at the very beginning, so that an
   # entire training run can be deterministic, but not with the exact same random augmentation during
   # each epoch.  Oh TensorFlow...
+  shape = tf.shape(image)
+  lb = shape[0]  # lower bound on the resize is the current size of the image
+  ub = lb + tf.to_int32(tf.to_float(lb)*0.25)  # upper bound is 25% larger
+  new_size = tf.random_uniform([2], minval=lb, maxval=ub, dtype=tf.int32, seed=seed)
+  image = tf.image.resize_images(image, new_size)  # random resize
+  image = tf.random_crop(image, shape, seed=seed)  # random cropping back to original size
   image = tf.image.random_flip_up_down(image, seed=seed)
   image = tf.image.random_flip_left_right(image, seed=seed)
   image = tf.image.random_brightness(image, 64/255, seed=seed)
