@@ -10,8 +10,9 @@ from keras import backend as K
 from keras.applications import VGG16, VGG19  #, ResNet50
 from resnet50 import ResNet50
 from keras.initializers import VarianceScaling
-from keras.layers import Dense, Dropout, Flatten, GlobalAveragePooling2D, Input
+from keras.layers import Dense, Dropout, Flatten, GlobalAveragePooling2D, Input, Lambda, concatenate
 from keras.models import Model
+#from keras.utils import multi_gpu_model
 import numpy as np
 import tensorflow as tf
 
@@ -231,7 +232,7 @@ def marginalize(x):
     A Tensor of shape (1, ...) containing the average over the batch
     dimension.
   """
-  avg_x = tf.reduce_mean(x, axis=0, keep_dims=True, name="avg_x")
+  avg_x = tf.reduce_mean(x, axis=0, keepdims=True, name="avg_x")
   x = tf.cond(tf.logical_not(K.learning_phase()), lambda: avg_x, lambda: x)
   return x
 
@@ -469,6 +470,96 @@ def create_model(model_name, input_shape, images):
   return model, model_base
 
 
+# based on `keras.utils.multi_gpu_model`
+def multi_gpu_model(model, gpus):
+    """Replicates a model on different GPUs.
+
+    Specifically, this function implements single-machine
+    multi-GPU data parallelism. It works in the following way:
+
+    - Divide the model's input(s) into multiple sub-batches.
+    - Apply a model copy on each sub-batch. Every model copy
+        is executed on a dedicated GPU.
+    - Concatenate the results (on CPU) into one big batch.
+
+    E.g. if your `batch_size` is 64 and you use `gpus=2`,
+    then we will divide the input into 2 sub-batches of 32 samples,
+    process each sub-batch on one GPU, then return the full
+    batch of 64 processed samples.
+
+    This induces quasi-linear speedup on up to 8 GPUs.
+
+    This function is only available with the TensorFlow backend
+    for the time being.
+
+    # Arguments
+        model: A Keras model instance. To avoid OOM errors,
+            this model could have been built on CPU, for instance
+            (see usage example below).
+        gpus: Integer >= 2 or list of integers, number of GPUs or
+            list of GPU IDs on which to create model replicas.
+
+    # Returns
+        A Keras `Model` instance which can be used just like the initial
+        `model` argument, but which distributes its workload on multiple GPUs.
+
+    """
+    if isinstance(gpus, (list, tuple)):
+        num_gpus = len(gpus)
+        target_gpu_ids = gpus
+    else:
+        num_gpus = gpus
+        target_gpu_ids = range(num_gpus)
+
+    def get_slice(data, i, parts):
+        shape = tf.shape(data)
+        batch_size = shape[:1]
+        input_shape = shape[1:]
+        step = batch_size // parts
+        if i == num_gpus - 1:
+            size = batch_size - step * i
+        else:
+            size = step
+        size = tf.concat([size, input_shape], axis=0)
+        stride = tf.concat([step, input_shape * 0], axis=0)
+        start = stride * i
+        return tf.slice(data, start, size)
+
+    all_outputs = []
+    for i in range(len(model.outputs)):
+        all_outputs.append([])
+
+    # Place a copy of the model on each GPU,
+    # each getting a slice of the inputs.
+    for i, gpu_id in enumerate(target_gpu_ids):
+      with tf.device('/cpu:0'):
+        inputs = []
+        # Retrieve a slice of the input on the CPU
+        for x in model.inputs:
+          input_shape = tuple(x.get_shape().as_list())[1:]
+          slice_i = Lambda(get_slice, output_shape=input_shape,
+                           arguments={'i': i, 'parts': num_gpus})(x)
+          inputs.append(slice_i)
+
+      with tf.device('/gpu:%d' % gpu_id):
+        with tf.name_scope('replica_%d' % gpu_id):
+          # Apply model on slice (creating a model replica on the target device).
+          outputs = model(inputs)
+          if not isinstance(outputs, list):
+            outputs = [outputs]
+
+          # Save the outputs for merging back together later.
+          for o in range(len(outputs)):
+            all_outputs[o].append(outputs[o])
+
+    # Merge outputs on CPU.
+    with tf.device('/cpu:0'):
+      merged = []
+      for name, outputs in zip(model.output_names, all_outputs):
+        merged.append(concatenate(outputs, axis=0, name=name))
+      return Model(model.inputs, merged)
+
+
 def compute_data_loss(labels, logits):
   """Compute the mean logistic loss.
 
@@ -614,8 +705,8 @@ def initialize_variables(sess):
 
 def train(train_path, val_path, exp_path, model_name, model_weights, patch_size, train_batch_size,
     val_batch_size, clf_epochs, finetune_epochs, clf_lr, finetune_lr, finetune_momentum,
-    finetune_layers, l2, augmentation, marginalization, oversampling, threads, prefetch_batches,
-    log_interval, checkpoint, resume, seed):
+    finetune_layers, l2, augmentation, marginalization, oversampling, num_gpus, threads,
+    prefetch_batches, log_interval, checkpoint, resume, seed):
   """Train a model.
 
   Args:
@@ -656,6 +747,7 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
       special debugging case of no augmentation.
     oversampling: Boolean for whether or not to oversample the minority
       mitosis class via class-aware sampling.
+    num_gpus: Integer number of GPUs to use for data parallelism.
     threads: Integer number of threads for dataset buffering.
     prefetch_batches: Integer number of batches to prefetch.
     log_interval: Integer number of steps between logging during
@@ -702,9 +794,18 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
 
   # models
   with tf.name_scope("model"):
-    model, model_base = create_model(model_name, input_shape, images)
+    # replicate model on each GPU to allow for data parallelism
+    if num_gpus > 1:
+      with tf.device("/cpu:0"):
+        model_tower, model_base = create_model(model_name, input_shape, images)
+      #model_tower, model_base = create_model(model_name, input_shape, images)
+      model = multi_gpu_model(model_tower, num_gpus)
+    else:
+      model_tower, model_base = create_model(model_name, input_shape, images)
+      model = model_tower
+
     if model_weights is not None:
-      model.load_weights(model_weights)
+      model_tower.load_weights(model_weights)
 
     # compute logits and predictions, possibly with marginalization
     # NOTE: tf prefers to feed logits into a combined sigmoid and logistic loss function for
@@ -720,7 +821,7 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
   with tf.name_scope("loss"):
     with tf.control_dependencies([tf.assert_equal(tf.shape(labels)[0], tf.shape(logits)[0])]):
       data_loss = compute_data_loss(labels, logits)
-      reg_loss = compute_l2_reg_loss(model, include_frozen=True)  # including all weights
+      reg_loss = compute_l2_reg_loss(model_tower, include_frozen=True)  # including all weights
       loss = data_loss + l2*reg_loss
       # TODO: enable this and test it
       # use l2 reg during training, but not during validation.  Otherwise, more fine-tuning will
@@ -737,12 +838,12 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
     for layer in model_base.layers:
       layer.trainable = False
     # add any weight regularization to the base loss for unfrozen layers:
-    clf_loss = data_loss + l2*compute_l2_reg_loss(model)  # including all weight regularization
+    clf_loss = data_loss + l2*compute_l2_reg_loss(model_tower)  # including all weight regularization
     clf_opt = tf.train.AdamOptimizer(clf_lr)
-    clf_grads_and_vars = clf_opt.compute_gradients(clf_loss, var_list=model.trainable_weights)
+    clf_grads_and_vars = clf_opt.compute_gradients(clf_loss, var_list=model_tower.trainable_weights)
     #clf_train_op = opt.minimize(clf_loss, var_list=model.trainable_weights)
     clf_apply_grads_op = clf_opt.apply_gradients(clf_grads_and_vars)
-    clf_model_update_ops = model.updates
+    clf_model_update_ops = model_tower.updates
     clf_train_op = tf.group(clf_apply_grads_op, *clf_model_update_ops)
 
     # finetuning
@@ -753,13 +854,13 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
       for layer in model_base.layers[-finetune_layers:]:
         layer.trainable = True
     # add any weight regularization to the base loss for unfrozen layers:
-    finetune_loss = data_loss + l2*compute_l2_reg_loss(model)  # including all weight regularization
+    finetune_loss = data_loss + l2*compute_l2_reg_loss(model_tower)  # including all weight regularization
     finetune_opt = tf.train.MomentumOptimizer(finetune_lr, finetune_momentum, use_nesterov=True)
     finetune_grads_and_vars = finetune_opt.compute_gradients(finetune_loss,
-        var_list=model.trainable_weights)
+        var_list=model_tower.trainable_weights)
     #finetune_train_op = opt.minimize(finetune_loss, var_list=model.trainable_weights)
     finetune_apply_grads_op = finetune_opt.apply_gradients(finetune_grads_and_vars)
-    finetune_model_update_ops = model.updates
+    finetune_model_update_ops = model_tower.updates
     finetune_train_op = tf.group(finetune_apply_grads_op, *finetune_model_update_ops)
 
   # metrics
@@ -812,7 +913,7 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
   tf.summary.histogram("data/images", images, collections=["minibatch", "minibatch_val"])
   tf.summary.histogram("data/labels", labels, collections=["minibatch", "minibatch_val"])
 
-  for layer in model.layers:
+  for layer in model_tower.layers:
     for weight in layer.weights:
       tf.summary.histogram(weight.name, weight, collections=["minibatch"])
     if hasattr(layer, 'output'):
@@ -924,7 +1025,7 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
       if checkpoint:
         keras_filename = os.path.join(exp_path, "checkpoints",
             f"{f1_val:.5}_f1_{mean_loss_val:.5}_loss_{global_epoch}_epoch_model.hdf5")
-        model.save(keras_filename, include_optimizer=False)  # keras model
+        model_tower.save(keras_filename, include_optimizer=False)  # keras model
         saver.save(sess, checkpoint_filename)  # full TF graph
         with open(global_step_epoch_filename, "wb") as f:
           pickle.dump((global_step, global_epoch), f)  # step & epoch
@@ -996,6 +1097,8 @@ def main(args=None):
   parser.add_argument("--oversample", default=False, action="store_true",
       help="oversample the minority mitosis class during training via class-aware sampling "\
            "(default: %(default)s)")
+  parser.add_argument("--num_gpus", type=int, default=1,
+      help="num_gpus: Integer number of GPUs to use for data parallelism. (default: %(default)s)")
   parser.add_argument("--threads", type=int, default=5,
       help="number of threads for dataset parallel processing; note: this will cause "\
            "non-reproducibility (default: %(default)s)")
@@ -1024,11 +1127,11 @@ def main(args=None):
     args.exp_name = date + "_" + args.model
   if args.exp_name_suffix is None:
     args.exp_name_suffix = f"patch_size_{args.patch_size}_batch_size_{args.train_batch_size}_"\
-                           f"clf_epochs_{args.clf_epochs}_finetune_epochs_{args.finetune_epochs}_"\
-                           f"clf_lr_{args.clf_lr}_finetune_lr_{args.finetune_lr}_finetune_"\
-                           f"momentum_{args.finetune_momentum}_finetune_layers_"\
-                           f"{args.finetune_layers}_l2_{args.l2}_aug_{args.augment}_marg_"\
-                           f"{args.marginalize}"
+                           f"clf_epochs_{args.clf_epochs}_ft_epochs_{args.finetune_epochs}_"\
+                           f"clf_lr_{args.clf_lr}_ft_lr_{args.finetune_lr}_"\
+                           f"ft_mom_{args.finetune_momentum}_ft_layers_{args.finetune_layers}_"\
+                           f"l2_{args.l2}_aug_{args.augment}_marg_{args.marginalize}_"\
+                           f"over_{args.oversample}"
   full_exp_name = args.exp_name + "_" + args.exp_name_suffix
   exp_path = os.path.join(args.exp_parent_path, full_exp_name)
 
@@ -1055,7 +1158,7 @@ def main(args=None):
       clf_epochs=args.clf_epochs, finetune_epochs=args.finetune_epochs, clf_lr=args.clf_lr,
       finetune_lr=args.finetune_lr, finetune_momentum=args.finetune_momentum,
       finetune_layers=args.finetune_layers, l2=args.l2, augmentation=args.augment,
-      marginalization=args.marginalize, oversampling=args.oversample,
+      marginalization=args.marginalize, oversampling=args.oversample, num_gpus=args.num_gpus,
       threads=args.threads, prefetch_batches=args.prefetch_batches, log_interval=args.log_interval,
       checkpoint=args.checkpoint, resume=args.resume, seed=args.seed)
 
@@ -1340,7 +1443,7 @@ def test_create_augmented_batch():
   reset()
   sess = K.get_session()
 
-  image = np.random.rand(64,64,3)
+  image = np.random.rand(64,64,3).astype(np.float32)
 
   # wrong sizes
   with pytest.raises(AssertionError):
@@ -1390,8 +1493,10 @@ def test_marginalize():
   marg_logits = marginalize(logits)  # tf ops
 
   # forgot K.learning_phase()
-  with pytest.raises(tf.errors.InvalidArgumentError):
-    l = sess.run(marg_logits)
+  # NOTE: this is no longer an error due to a Keras change that sets a default value of 0 for
+  # `K.learning_phase()`.
+  #with pytest.raises(tf.errors.InvalidArgumentError):
+  #  l = sess.run(marg_logits)
 
   # train time
   l = sess.run(marg_logits, feed_dict={K.learning_phase(): 1})

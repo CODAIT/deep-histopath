@@ -62,6 +62,8 @@ def main(args=None):
   parser.add_argument("--oversample", default=False, action="store_true",
       help="oversample the minority mitosis class during training via class-aware sampling "\
            "(default: %(default)s)")
+  parser.add_argument("--num_gpus", type=int, default=1,
+      help="num_gpus: Integer number of GPUs to use for data parallelism. (default: %(default)s)")
   parser.add_argument("--threads", type=int, default=5,
       help="number of threads for dataset parallel processing; note: this will cause "\
            "non-reproducibility for values > 1 (default: %(default)s)")
@@ -128,6 +130,8 @@ def main(args=None):
 
     if args.oversample:
       train_args.append("--oversample")
+
+    train_args.append(f"--num_gpus={args.num_gpus}")
 
     train_args.append(f"--threads={args.threads}")
 
