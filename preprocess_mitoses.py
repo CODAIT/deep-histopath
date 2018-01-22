@@ -507,12 +507,15 @@ def preprocess(images_path, labels_path, dataset, base_save_path, train_size, pa
                 coords = [[c[i:i+2] for i in range(0, len(c), 2)] for c in coords]
                 coords = [np.mean(np.array(c), axis=0) for c in coords]
                 coords = np.array(coords).astype(np.int64)
+                # MUST REVERSE THIS BECAUSE ICPR DATASETS ARE IN (COL, ROW) FORMAT!!!!
+                coords[:, [0, 1]] = coords[:, [1, 0]]
               else:  # dataset == "icpr2014"
                 # the icpr 2014 dataset contains a x,y,z coordinate per line corresponding to the
                 # of a nucleus that is mitotic if z == 1, and non-mitotic if z == 0
                 coords = np.loadtxt(coords_path, dtype=np.int64, delimiter=',', ndmin=2,
                     usecols=(0,1))
-                pass
+                # MUST REVERSE THIS BECAUSE ICPR DATASETS ARE IN (COL, ROW) FORMAT!!!!
+                coords[:, [0, 1]] = coords[:, [1, 0]]
             else:  # a missing file indicates no mitoses
               coords = []  # no mitoses
 
@@ -663,7 +666,7 @@ if __name__ == "__main__":
 
   # load model for false-positive oversampling
   if args.model_path is not None:
-    model = load_model(args.model_path)
+    model = load_model(args.model_path, compile=False)
   else:
     model = None
 
