@@ -311,7 +311,7 @@ def gen_patches(im, coords, size, rotations, translations, max_shift, p):
       rotated_patch = np.asarray(bounding_patch.rotate(theta, Image.BILINEAR))  # then back to numpy
 
       # random translations
-      shifts = [gen_random_translation(h, w, row, col, max_shift) for _ in range(rotations)]
+      shifts = [gen_random_translation(h, w, row, col, max_shift) for _ in range(translations)]
       for row_shift, col_shift in [(0, 0)] + shifts:  # always include 0 shift
         patch = extract_patch(rotated_patch, row_center + row_shift, col_center + col_shift, size)
         patch = patch.astype(orig_dtype)  # convert back to original data type

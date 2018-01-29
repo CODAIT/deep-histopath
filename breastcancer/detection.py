@@ -102,9 +102,8 @@ def disk_kernel(radius):
     radius: Integer value for the radius of the disk kernel.
 
   Returns:
-    A disk kernel in which values within a distance of
-    radius^2 from the center of the kernel are equal to
-    one.
+    A disk kernel in which values within a Euclidean distance of
+    `radius` from the center of the kernel are equal to one.
   """
   d = radius
   coords = np.arange(-d, d + 1)
