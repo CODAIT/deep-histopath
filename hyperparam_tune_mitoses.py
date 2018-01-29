@@ -1,7 +1,9 @@
 """Hyperparameter tuning - mitosis detection"""
 import argparse
+import json
 import os
 import random
+import sys
 
 import numpy as np
 import tensorflow as tf
@@ -75,6 +77,20 @@ def main(args=None):
       help="number of experiments to run (default: %(default)s)")
 
   args = parser.parse_args(args)
+
+  # save args to a file in the experiment parent folder, appending if it exists
+  if not os.path.exists(args.exp_parent_path):
+    os.makedirs(args.exp_parent_path)
+  with open(os.path.join(args.exp_parent_path, 'args.txt'), 'a') as f:
+    json.dump(args.__dict__, f)
+    print("", file=f)
+    # can be read in later with
+    #with open('args.txt', 'r') as f:
+    #  args = json.load(f)
+
+  # save command line invocation to txt file for ease of rerunning the exact hyperparam search
+  with open(os.path.join(args.exp_parent_path, 'invoke.txt'), 'a') as f:
+    f.write("python3 " + " ".join(sys.argv) + "\n")
 
   # hyperparameter search
   for i in range(args.num_experiments):

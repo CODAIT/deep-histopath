@@ -1,9 +1,11 @@
 """Preprocessing - mitosis detection"""
 import argparse
 import glob
+import json
 import math
 import os
 import shutil
+import sys
 
 from keras.models import load_model
 import numpy as np
@@ -659,7 +661,15 @@ if __name__ == "__main__":
   if not os.path.exists(args.save_path):
     os.makedirs(args.save_path)
   with open(os.path.join(args.save_path, 'args.txt'), 'w') as f:
-    f.write(str(args))
+    json.dump(args.__dict__, f)
+    print("", file=f)
+    # can be read in later with
+    #with open('args.txt', 'r') as f:
+    #  args = json.load(f)
+
+  # save command line invocation to txt file for ease of rerunning the exact experiment
+  with open(os.path.join(args.save_path, 'invoke.txt'), 'w') as f:
+    f.write("python3 " + " ".join(sys.argv) + "\n")
 
   # copy this script to the base save folder
   shutil.copy2(os.path.realpath(__file__), args.save_path)

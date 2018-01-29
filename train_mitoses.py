@@ -1,9 +1,11 @@
 """Training - mitosis detection"""
 import argparse
 from datetime import datetime
+import json
 import os
 import pickle
 import shutil
+import sys
 
 import keras
 from keras import backend as K
@@ -1069,7 +1071,7 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
 
 
 
-def main(args=None):
+def main(argv=None):
   """Command line interface for this script.  Can optionally pass in a
   list of strings to simulate command line usage.
   """
@@ -1147,7 +1149,7 @@ def main(args=None):
       help="resume training from a checkpoint (default: %(default)s)")
   parser.add_argument("--seed", type=int, help="random seed (default: %(default)s)")
 
-  args = parser.parse_args(args)
+  args = parser.parse_args(argv)
 
   # set train/val paths
   train_path = os.path.join(args.patches_path, "train")
@@ -1177,7 +1179,22 @@ def main(args=None):
 
   # save args to a file in the experiment folder, appending if it exists
   with open(os.path.join(exp_path, 'args.txt'), 'a') as f:
-    f.write(str(args) + "\n")
+    json.dump(args.__dict__, f)
+    print("", file=f)
+    # can be read in later with
+    #with open('args.txt', 'r') as f:
+    #  args = json.load(f)
+
+  # save command line invocation to txt file for ease of rerunning the exact experiment
+  with open(os.path.join(exp_path, 'invoke.txt'), 'a') as f:
+    # NOTE: since we sometimes call this `main` function via the hyperparam search script, we can't
+    # always use `sys.argv` because it would always refer to the outer invocation, i.e., the
+    # invocation of the hyperparam search script.
+    if argv is not None:  # called from hpo script
+      fname = os.path.basename(__file__)
+      f.write(f"python3 {fname} " + " ".join(argv) + "\n")
+    else:  # called directly
+      f.write("python3 " + " ".join(sys.argv) + "\n")
 
   # copy this script to the experiment folder
   shutil.copy2(os.path.realpath(__file__), exp_path)
