@@ -75,8 +75,11 @@ def evaluate(patches_path, patch_size, batch_size, model, model_name, prob_thres
 
   # metrics
   with tf.name_scope("metrics"):
-    mean_loss, acc, ppv, sens, f1, metric_update_ops, metric_reset_ops = compute_metrics(loss,
-        labels, preds)
+    num_thresholds = 11
+    mean_loss, acc, ppv, sens, f1, pr, f1s, metric_update_ops, metric_reset_ops = compute_metrics(
+      loss, labels, preds, probs, num_thresholds)
+    f1_max = tf.reduce_max(f1s)
+    thresh_max = pr.thresholds[tf.argmax(f1s)]
 
   # initialize stuff
   sess = K.get_session()
@@ -99,8 +102,10 @@ def evaluate(patches_path, patch_size, batch_size, model, model_name, prob_thres
       break
 
   # log average validation metrics
-  f1_val, ppv_val, sens_val, acc_val, mean_loss_val = sess.run([f1, ppv, sens, acc, mean_loss])
-  print("f1: {}".format(f1_val))
+  f1_val, f1_max_val, thresh_max_val, ppv_val, sens_val, acc_val, mean_loss_val = sess.run(
+      [f1, f1_max, thresh_max, ppv, sens, acc, mean_loss])
+  print("f1 (0.5): {}".format(f1_val))
+  print("f1_max ({}): {}".format(thresh_max_val, f1_max_val))
   print("ppv: {}".format(ppv_val))
   print("sens: {}".format(sens_val))
   print("acc: {}".format(acc_val))
@@ -143,6 +148,14 @@ def main(args=None):
 
   # load model
   model = load_model(args.model_path, compile=False)
+
+  # sanity check to check for keras bug
+  #from keras.layers import Input
+  #from train_mitoses import create_model
+  #input_shape = (args.patch_size, args.patch_size, 3)
+  #images = Input(input_shape)
+  #model, model_base = create_model(args.model_name, input_shape, images)
+  #model.load_weights(args.model_path)
 
   # eval!
   evaluate(args.patches_path, args.patch_size, args.batch_size, model, args.model_name,

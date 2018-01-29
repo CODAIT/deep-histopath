@@ -15,6 +15,7 @@ from keras.models import Model
 #from keras.utils import multi_gpu_model
 import numpy as np
 import tensorflow as tf
+from tensorboard import summary as summary_lib
 
 
 # data
@@ -163,12 +164,16 @@ def augment(image, seed=None):
   # same.  The desired behavior would be to seed these ops once at the very beginning, so that an
   # entire training run can be deterministic, but not with the exact same random augmentation during
   # each epoch.  Oh TensorFlow...
-  shape = tf.shape(image)
-  lb = shape[0]  # lower bound on the resize is the current size of the image
-  ub = lb + tf.to_int32(tf.to_float(lb)*0.25)  # upper bound is 25% larger
-  new_size = tf.random_uniform([2], minval=lb, maxval=ub, dtype=tf.int32, seed=seed)
-  image = tf.image.resize_images(image, new_size)  # random resize
-  image = tf.random_crop(image, shape, seed=seed)  # random cropping back to original size
+  # TODO: add random rotations (tf.contrib.image.rotate) enabled via flag
+  # TODO: add central cropping to patch_size + 2*max_shift
+  # TODO: re-enable random resizes enabled via flag
+  # TODO: re-enable random crop to patch_size enabled via flag
+  #shape = tf.shape(image)
+  #lb = shape[0]  # lower bound on the resize is the current size of the image
+  #ub = lb + tf.to_int32(tf.to_float(lb)*0.25)  # upper bound is 25% larger
+  #new_size = tf.random_uniform([2], minval=lb, maxval=ub, dtype=tf.int32, seed=seed)
+  #image = tf.image.resize_images(image, new_size)  # random resize
+  #image = tf.random_crop(image, shape, seed=seed)  # random cropping back to original size
   image = tf.image.random_flip_up_down(image, seed=seed)
   image = tf.image.random_flip_left_right(image, seed=seed)
   image = tf.image.random_brightness(image, 64/255, seed=seed)
@@ -597,7 +602,7 @@ def compute_l2_reg_loss(model, include_frozen=False):
   return l2_loss
 
 
-def compute_metrics(loss, labels, preds):
+def compute_metrics(loss, labels, preds, probs, num_thresholds):
   """Compute metrics.
 
   This creates ops that compute metrics in a streaming fashion.
@@ -605,13 +610,18 @@ def compute_metrics(loss, labels, preds):
   Args:
     loss: A Tensor representing the current batch mean loss.
     labels: A Tensor of shape (n, 1) containing a batch of labels.
-    preds: A Tensor of shape (n, 1) containing a batch of prediction
-      values.
+    preds: A Tensor of shape (n, 1) containing a batch of binary
+      prediction values.
+    probs: A Tensor of shape (n, 1) containing a batch of probabilistic
+      prediction values.
+    num_thresholds: An integer indicating the number of thresholds to
+      use to compute PR curves.
 
   Returns:
     A tuple of mean loss, accuracy, positive predictive value
-    (precision), sensitivity (recall), F1, a grouped metrics update op,
-    and a group metrics reset op.
+    (precision), sensitivity (recall), F1, PR curve data, F1 list
+    based on the PR curve data, a grouped metrics update op, and a
+    group metrics reset op.
   """
   # TODO: think about converting this to a class
   mean_loss, mean_loss_update_op, mean_loss_reset_op = create_resettable_metric(tf.metrics.mean,
@@ -623,12 +633,18 @@ def compute_metrics(loss, labels, preds):
   sens, sens_update_op, sens_reset_op = create_resettable_metric(tf.metrics.recall,
       'sens', labels=labels, predictions=preds)
   f1 = 2 * (ppv * sens) / (ppv + sens)
+  pr, pr_update_op, pr_reset_op = create_resettable_metric(
+      tf.contrib.metrics.precision_recall_at_equal_thresholds,
+      'pr', labels=tf.cast(labels, dtype=tf.bool), predictions=probs, num_thresholds=num_thresholds)
+  f1s = 2 * (pr.precision * pr.recall) / (pr.precision + pr.recall)
 
   # combine all reset & update ops
-  metric_update_ops = tf.group(mean_loss_update_op, acc_update_op, ppv_update_op, sens_update_op)
-  metric_reset_ops = tf.group(mean_loss_reset_op, acc_reset_op, ppv_reset_op, sens_reset_op)
+  metric_update_ops = tf.group(mean_loss_update_op, acc_update_op, ppv_update_op, sens_update_op,
+      pr_update_op)
+  metric_reset_ops = tf.group(mean_loss_reset_op, acc_reset_op, ppv_reset_op, sens_reset_op,
+      pr_reset_op)
 
-  return mean_loss, acc, ppv, sens, f1, metric_update_ops, metric_reset_ops
+  return mean_loss, acc, ppv, sens, f1, pr, f1s, metric_update_ops, metric_reset_ops
 
 
 # utils
@@ -865,8 +881,10 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
 
   # metrics
   with tf.name_scope("metrics"):
-    mean_loss, acc, ppv, sens, f1, metric_update_ops, metric_reset_ops = compute_metrics(loss,
-        labels, preds)
+    num_thresholds = 11
+    mean_loss, acc, ppv, sens, f1, pr, f1s, metric_update_ops, metric_reset_ops = compute_metrics(
+      loss, labels, preds, probs, num_thresholds)
+    f1_max = tf.reduce_max(f1s)
 
   # tensorboard summaries
   # TODO: extract this into a function
@@ -942,6 +960,19 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
     tf.summary.scalar("ppv", ppv, collections=["epoch"])
     tf.summary.scalar("sens", sens, collections=["epoch"])
     tf.summary.scalar("f1", f1, collections=["epoch"])
+    tf.summary.scalar("f1_max", f1_max, collections=["epoch"])
+    summary_lib.pr_curve_raw_data_op(
+        name='pr_curve',
+        true_positive_counts=pr.tp,
+        false_positive_counts=pr.fp,
+        true_negative_counts=pr.tn,
+        false_negative_counts=pr.fn,
+        precision=pr.precision,
+        recall=pr.recall,
+        num_thresholds=num_thresholds,
+        display_name='pr curve',
+        description=f"PR curve for {num_thresholds} thresholds.",
+        collections=["epoch"])
   epoch_summaries = tf.summary.merge_all("epoch")
 
   # use train and val writers so that plots can be on same graph
