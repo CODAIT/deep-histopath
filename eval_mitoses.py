@@ -104,12 +104,12 @@ def evaluate(patches_path, patch_size, batch_size, model, model_name, prob_thres
   # log average validation metrics
   f1_val, f1_max_val, thresh_max_val, ppv_val, sens_val, acc_val, mean_loss_val = sess.run(
       [f1, f1_max, thresh_max, ppv, sens, acc, mean_loss])
-  print("f1 (0.5): {}".format(f1_val))
-  print("f1_max ({}): {}".format(thresh_max_val, f1_max_val))
-  print("ppv: {}".format(ppv_val))
-  print("sens: {}".format(sens_val))
-  print("acc: {}".format(acc_val))
-  print("loss: {}".format(mean_loss_val))
+  print(f"f1 (@ {prob_threshold}): {f1_val}")
+  print(f"f1_max (@ {thresh_max_val}): {f1_max_val}")
+  print(f"ppv: {ppv_val}")
+  print(f"sens: {sens_val}")
+  print(f"acc: {acc_val}")
+  print(f"loss: {mean_loss_val}")
 
   return f1_val, ppv_val, sens_val, acc_val, mean_loss_val
 

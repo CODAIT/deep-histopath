@@ -887,6 +887,7 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
     mean_loss, acc, ppv, sens, f1, pr, f1s, metric_update_ops, metric_reset_ops = compute_metrics(
       loss, labels, preds, probs, num_thresholds)
     f1_max = tf.reduce_max(f1s)
+    thresh_max = pr.thresholds[tf.argmax(f1s)]
 
   # tensorboard summaries
   # TODO: extract this into a function
@@ -1022,10 +1023,12 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
         except tf.errors.OutOfRangeError:
           break
       # log average training metrics for epoch & reset
-      op_values = sess.run([f1, ppv, sens, acc, mean_loss, epoch_summaries])
-      f1_val, ppv_val, sens_val, acc_val, mean_loss_val, summary_str = op_values
-      print(f"---epoch {global_epoch}, train f1: {f1_val}, train ppv: {ppv_val}, train sens: "\
-            f"{sens_val}, train acc: {acc_val}, train avg loss: {mean_loss_val}")
+      op_values = sess.run([f1, f1_max, thresh_max, ppv, sens, acc, mean_loss, epoch_summaries])
+      (f1_val, f1_max_val, thresh_max_val, ppv_val, sens_val, acc_val, mean_loss_val,
+          summary_str) = op_values
+      print(f"---epoch {global_epoch}, train f1 (@ 0.5): {f1_val}, train max f1 "\
+            f"(@ {thresh_max_val}): {f1_max_val}, train ppv: {ppv_val}, train sens: {sens_val}, "\
+            f"train acc: {acc_val}, train avg loss: {mean_loss_val}")
       train_writer.add_summary(summary_str, global_epoch)
       sess.run(metric_reset_ops)
 
@@ -1047,17 +1050,20 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
         except tf.errors.OutOfRangeError:
           break
       # log average validation metrics for epoch & reset
-      op_values = sess.run([f1, ppv, sens, acc, mean_loss, epoch_summaries])
-      f1_val, ppv_val, sens_val, acc_val, mean_loss_val, summary_str = op_values
-      print(f"---epoch {global_epoch}, val f1: {f1_val}, val ppv: {ppv_val}, val sens: {sens_val},"\
-            f" val acc: {acc_val}, val avg loss: {mean_loss_val}")
+      op_values = sess.run([f1, f1_max, thresh_max, ppv, sens, acc, mean_loss, epoch_summaries])
+      (f1_val, f1_max_val, thresh_max_val, ppv_val, sens_val, acc_val, mean_loss_val,
+          summary_str) = op_values
+      print(f"---epoch {global_epoch}, val f1 (@ 0.5): {f1_val}, val max f1 (@ {thresh_max_val}): "\
+            f"{f1_max_val}, val ppv: {ppv_val}, val sens: {sens_val}, val acc: {acc_val}, "\
+            f"val avg loss: {mean_loss_val}")
       val_writer.add_summary(summary_str, global_epoch)
       sess.run(metric_reset_ops)
 
       # save model
       if checkpoint:
         keras_filename = os.path.join(exp_path, "checkpoints",
-            f"{f1_val:.5}_f1_{mean_loss_val:.5}_loss_{global_epoch}_epoch_model.hdf5")
+            f"{f1_max_val:.5}_f1max_{f1_val:.5}_f1_{mean_loss_val:.5}_loss_{global_epoch}_"\
+            f"epoch_model.hdf5")
         model_tower.save(keras_filename, include_optimizer=False)  # keras model
         saver.save(sess, checkpoint_filename)  # full TF graph
         with open(global_step_epoch_filename, "wb") as f:
