@@ -6,7 +6,7 @@ import pandas as pd
 from pathlib import Path
 import re, os
 from PIL import Image
-from breastcancer.visualization import Shape, add_mark
+from deephistopath.visualization import Shape, add_mark
 
 GROUND_TRUTH_FILE_ID_RE = "(\d+/\d+)[.csv|.tif|_mark.tif|_mask.tif]"
 
@@ -500,7 +500,7 @@ def test_img_quality():
   import os
   import openslide
   import tensorflow as tf
-  from breastcancer.preprocessing import create_tile_generator, get_20x_zoom_level
+  from deephistopath.preprocessing import create_tile_generator, get_20x_zoom_level
   import pandas as pd
 
   # all the output images from these reader functions are in the type of

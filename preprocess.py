@@ -33,7 +33,7 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from pyspark.sql import SparkSession
 
-from breastcancer.preprocessing import add_row_indices, get_labels_df, preprocess, save_df, sample, rdd_2_df, save_rdd_2_jpeg
+from deephistopath.preprocessing import add_row_indices, get_labels_df, preprocess, save_df, sample, rdd_2_df, save_rdd_2_jpeg
 
 
 # Create new SparkSession
@@ -41,11 +41,11 @@ spark = (SparkSession.builder
                      .appName("Breast Cancer -- Preprocessing")
                      .getOrCreate())
 
-# Ship a fresh copy of the `breastcancer` package to the Spark workers.
-# Note: The zip must include the `breastcancer` directory itself,
+# Ship a fresh copy of the `deephistopath` package to the Spark workers.
+# Note: The zip must include the `deephistopath` directory itself,
 # as well as all files within it for `addPyFile` to work correctly.
-# This is equivalent to `zip -r breastcancer.zip breastcancer`.
-dirname = "breastcancer"
+# This is equivalent to `zip -r deephistopath.zip deephistopath`.
+dirname = "deephistopath"
 zipname = dirname + ".zip"
 shutil.make_archive(dirname, 'zip', dirname + "/..", dirname)
 spark.sparkContext.addPyFile(zipname)

@@ -10,8 +10,8 @@ from time import gmtime, strftime
 from pathlib import Path
 import openslide
 
-from breastcancer.preprocessing import create_tile_generator, get_20x_zoom_level
-from breastcancer.visualization import add_mark, Shape
+from deephistopath.preprocessing import create_tile_generator, get_20x_zoom_level
+from deephistopath.visualization import add_mark, Shape
 
 from PIL import Image
 
@@ -208,7 +208,7 @@ def predict_mitoses_num_locations(model, model_name, threshold, ROI, tile_size=6
       prep_tile_np = (tile / 255).astype(np.float32)  # convert to values in [0,1]
       pred_np, aug_preds_np = sess.run((pred, aug_preds), feed_dict={prep_tile: prep_tile_np, K.learning_phase(): 0})
       predictions = np.concatenate((predictions, pred_np), axis=0)
-    
+
       print (f"The {predictions.shape[0]}th prediction: max: {np.max(aug_preds_np)}, min: {np.min(aug_preds_np)}, avg: {pred_np}")
 
   else:

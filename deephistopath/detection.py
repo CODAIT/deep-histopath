@@ -8,8 +8,8 @@ from PIL import Image
 import tensorflow as tf
 from sklearn.cluster import DBSCAN
 
-from breastcancer.evaluation import list_files, get_file_id, get_locations_from_csv
-from breastcancer.evaluation import GROUND_TRUTH_FILE_ID_RE
+from deephistopath.evaluation import list_files, get_file_id, get_locations_from_csv
+from deephistopath.evaluation import GROUND_TRUTH_FILE_ID_RE
 
 
 
