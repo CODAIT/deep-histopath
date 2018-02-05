@@ -127,6 +127,12 @@ def main(args=None):
                                 .flatMap(lambda t: flat_result_2_row(t))\
                                 .cache()
 
+  # NOTE: Force computation of the RDD before converting it to a DataFrame; otherwise, the
+  # parallelism will be initially reduced to a single task to check the schema of the resulting
+  # dataframe.  This overall prediction job is too computationally intensive to waste time on such
+  # things, so by executing and caching the RDD, we can maximize the amount of parallel processing.
+  num_preds = pred_rows.count()
+
   df = spark.createDataFrame(pred_rows, ['slide_id', 'ROI_id', 'mitosis_num_per_ROI', 'row_num',
                                          'col_num', 'score'])
 
