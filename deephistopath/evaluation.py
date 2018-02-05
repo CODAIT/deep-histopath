@@ -252,10 +252,11 @@ def evaluate_global_f1(pred_dir, ground_true_dir, threshold=30, prob_threshold=N
     prob_threshold: prediction probability threshold
 
   Return:
-     a tuple of (a single F1_score; a list of files
-      that are detected by model, but not in the ground truth data; a
-      list of files that are not detected by model, but in the ground
-      truth data; a list of FP; a list of TP; a list of FN).
+    A tuple of (a single F1_score; a single precision value; a single
+    recall value; a list of files that are detected by model, but not in
+    the ground truth data; a list of files that are not detected by
+    model, but in the ground truth data; a list of FP; a list of TP; a
+    list of FN).
   """
   pred_files = list_files(pred_dir, "*.csv")
   pred_files = get_file_id(pred_files, GROUND_TRUTH_FILE_ID_RE)

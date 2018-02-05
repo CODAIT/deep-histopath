@@ -320,15 +320,16 @@ def cluster_prediction_result(pred_dir, eps, min_samples, hasHeader, isWeightedA
   Args:
     pred_dir: directory for the prediction result
     eps: maximum distance between two samples for them to be considered
-     as in the same neighborhood.
+      as in the same neighborhood.
     min_samples: number of samples (or total weight) in a neighborhood
-     for a point to be considered as a core point.
+      for a point to be considered as a core point.
     hasHeader: boolean value to indicate if the csv file has the header
     isWeightedAvg: boolean value to indicate if add the prediction.
-     probabilities as  the weight to compute the averaged coordinates of
-     each cluster.
+      probabilities as  the weight to compute the averaged coordinates
+      of each cluster.
+    prob_threshold: probability threshold over which the location is
+      considered a positive prediction for the purposes of clustering.
   """
-
   pred_files = list_files(pred_dir, "*.csv")
   pred_files = get_file_id(pred_files, GROUND_TRUTH_FILE_ID_RE)
   for k, pred_file in pred_files.items():

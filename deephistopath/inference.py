@@ -318,8 +318,8 @@ def predict_mitoses_help(model_file, model_name, index, file_partition,
       # get the ROI
       zl, col, row = ROI_index
       ROI = np.asarray(generator.get_tile(zl, (col, row)))
-      # skip the ROIs whose size is smaller than the tile size
-      if ROI.shape[0] < ROI_size or ROI.shape[1] < ROI_size:
+      # if we are using ROIs, skip the ROIs whose size is smaller than the tile size
+      if not skipROI and (ROI.shape[0] < ROI_size or ROI.shape[1] < ROI_size):
         continue
       mitosis_location_score_list = []
       # predict the mitoses with location information
