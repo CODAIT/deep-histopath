@@ -38,7 +38,8 @@ def get_image(filename, patch_size):
   # shape (h,w,c), uint8 in [0, 255]:
   image = tf.image.decode_png(image_string, channels=3)
   image = tf.image.convert_image_dtype(image, dtype=tf.float32)  # float32 [0, 1)
-  image = tf.image.resize_images(image, [patch_size, patch_size])  # float32 [0, 1)
+  # TODO: remove this
+  #image = tf.image.resize_images(image, [patch_size, patch_size])  # float32 [0, 1)
   #with tf.control_dependencies([tf.assert_type(image, tf.float32, image.dtype)]):
   return image
 
@@ -139,11 +140,12 @@ def unnormalize(image, model_name):
   return image
 
 
-def augment(image, seed=None):
+def augment(image, patch_size, seed=None):
   """Apply random data augmentation to the given image.
 
   Args:
     image: A Tensor of shape (h,w,c) with values in [0, 1].
+    patch_size: The patch size to which to randomly crop the image.
     seed: An integer used to create a random seed.
 
   Returns:
@@ -152,7 +154,7 @@ def augment(image, seed=None):
   # NOTE: these values currently come from the Google pathology paper:
   # Liu Y, Gadepalli K, Norouzi M, Dahl GE, Kohlberger T, Boyko A, et al.
   # Detecting Cancer Metastases on Gigapixel Pathology Images. arXiv.org. 2017.
-  # TODO: convert these hardcoded values into hyperparameters
+  # TODO: convert these hardcoded values into hyperparameters!!
   # NOTE: if the seed is None, these ops will be seeded with a completely random seed, rather than
   # a deterministic one based on the graph seed. This appears to only happen within the map
   # functions of the Dataset API, based on the `test_num_parallel_calls` and
@@ -166,16 +168,32 @@ def augment(image, seed=None):
   # same.  The desired behavior would be to seed these ops once at the very beginning, so that an
   # entire training run can be deterministic, but not with the exact same random augmentation during
   # each epoch.  Oh TensorFlow...
-  # TODO: add random rotations (tf.contrib.image.rotate) enabled via flag
-  # TODO: add central cropping to patch_size + 2*max_shift
-  # TODO: re-enable random resizes enabled via flag
-  # TODO: re-enable random crop to patch_size enabled via flag
-  #shape = tf.shape(image)
+  shape = tf.shape(image)  # (h, w, c)
+  # random zoom
+  # TODO: possibly re-enable random zooms enabled via flag
   #lb = shape[0]  # lower bound on the resize is the current size of the image
   #ub = lb + tf.to_int32(tf.to_float(lb)*0.25)  # upper bound is 25% larger
   #new_size = tf.random_uniform([2], minval=lb, maxval=ub, dtype=tf.int32, seed=seed)
   #image = tf.image.resize_images(image, new_size)  # random resize
   #image = tf.random_crop(image, shape, seed=seed)  # random cropping back to original size
+  # random rotation
+  angle = tf.random_uniform([], minval=0, maxval=2*np.pi, seed=seed)
+  image = tf.contrib.image.rotate(image, angle, "BILINEAR", name="rotate_aug")
+  # crop to bounding box to allow for random translation crop, if the input image is large enough
+  # note: translation distance: 7 µm = 30 pixels = max allowable euclidean pred distance from
+  # actual mitosis
+  # note: the allowable region is a circle with radius 30, but we are cropping to a square, so we
+  # can't crop from a square with side length of patch_size+30 or we run the risk of moving the
+  # mitosis to a spot in the corner of the resulting image, which would be outside of the circle
+  # radius, and thus we would be incorrect to label that image as positive.  We also want to impose
+  # some amount of buffer into our learned model, so we place an upper bound of ~25 pixels, instead
+  # of 30, and then math leads us to limiting the translation size across each dimension to 18.
+  # sqrt(18**2 + 18**2) = 25.45 = 6.25 µm
+  d = 18  # TODO: set this as a hyperparameter
+  crop_size = tf.minimum(shape[0], patch_size+2*d)  # note that h should be equal to w
+  image = tf.image.resize_image_with_crop_or_pad(image, crop_size, crop_size)
+  # random central crop == random translation augmentation
+  image = tf.random_crop(image, [patch_size, patch_size, shape[-1]], seed=seed, name="crop_aug")
   image = tf.image.random_flip_up_down(image, seed=seed)
   image = tf.image.random_flip_left_right(image, seed=seed)
   image = tf.image.random_brightness(image, 64/255, seed=seed)
@@ -186,7 +204,7 @@ def augment(image, seed=None):
   return image
 
 
-def create_augmented_batch(image, batch_size):
+def create_augmented_batch(image, batch_size, patch_size):
   """Create a batch of augmented versions of the given image.
 
   This will sample `batch_size/4` augmented images deterministically,
@@ -196,6 +214,7 @@ def create_augmented_batch(image, batch_size):
   Args:
     image: A Tensor of shape (h,w,c).
     batch_size: Number of augmented versions to generate.
+    patch_size: The patch size to which to randomly crop the image.
 
   Returns:
     A Tensor of shape (batch_size,h,w,c) containing a batch of
@@ -214,7 +233,7 @@ def create_augmented_batch(image, batch_size):
   if batch_size >= 4:
     images = rots_batch(image)
     for i in range(round(batch_size/4)-1):
-      aug_image = augment(image, i)
+      aug_image = augment(image, patch_size, i)
       aug_image_rots = rots_batch(aug_image)
       images = tf.concat([images, aug_image_rots], axis=0)
   else:
@@ -275,13 +294,14 @@ def process_dataset(dataset, model_name, patch_size, augmentation, marginalizati
 
   # augment (typically at training time)
   if augmentation:
-    dataset = dataset.map(lambda image, label, filename: (augment(image, seed), label, filename),
+    dataset = dataset.map(
+        lambda image, label, filename: (augment(image, patch_size, seed), label, filename),
         num_parallel_calls=threads)
 
   # marginalize (typically at eval time)
   if marginalization:
     dataset = dataset.map(lambda image, label, filename:
-        (create_augmented_batch(image, batch_size),
+        (create_augmented_batch(image, batch_size, patch_size),
          tf.tile(tf.expand_dims(label, -1), [batch_size]),
          tf.tile(tf.expand_dims(filename, -1), [batch_size])),
         num_parallel_calls=threads)
@@ -1349,7 +1369,7 @@ def test_normalize_unnormalize():
     assert np.all(np.max(x_norm, axis=(0,1)) < 255 - means)
     assert np.all(np.min(x_norm, axis=(0,1)) < 0)
     assert np.all(np.min(x_norm, axis=(0,1)) > 0 - means)
-    assert np.allclose(x_unnorm, x_np, rtol=1e-4)  #, atol=1e-7)
+    assert np.allclose(x_unnorm, x_np, rtol=1e-4, atol=1e-7)
 
   # batch of examples
   def test_batch(x_batch_norm, x_batch_unnorm):
@@ -1363,7 +1383,7 @@ def test_normalize_unnormalize():
     assert np.all(np.max(x_batch_norm, axis=(0,1,2)) < 255 - means)
     assert np.all(np.min(x_batch_norm, axis=(0,1,2)) < 0)
     assert np.all(np.min(x_batch_norm, axis=(0,1,2)) > 0 - means)
-    assert np.allclose(x_batch_unnorm, x_batch_unnorm_np)  #, atol=1e-7)
+    assert np.allclose(x_batch_unnorm, x_batch_unnorm_np, atol=1e-7)
 
   ## numpy
   x_norm_np = normalize(x_np, model_name)
@@ -1456,11 +1476,12 @@ def test_augment(tmpdir):
 
   # create png image
   filename = os.path.join(str(tmpdir), "x.png")
-  x = np.random.randint(0, 255, dtype=np.uint8, size=(64,64,3))
+  patch_size = 64
+  x = np.random.randint(0, 255, dtype=np.uint8, size=(patch_size, patch_size,3))
   Image.fromarray(x).save(filename)
 
   image_op = get_image(filename, 64)
-  aug_image_op = augment(image_op)
+  aug_image_op = augment(image_op, patch_size)
   sess = K.get_session()
   image, aug_image = sess.run([image_op, aug_image_op])
 
@@ -1474,15 +1495,15 @@ def test_augment(tmpdir):
   # seeds
   reset()
   image_op = get_image(filename, 64)
-  aug_image_op1 = augment(image_op, 1)
-  aug_image_op2 = augment(image_op, 2)
+  aug_image_op1 = augment(image_op, patch_size, 1)
+  aug_image_op2 = augment(image_op, patch_size, 2)
   sess = K.get_session()
   aug_image1a, aug_image2a = sess.run([aug_image_op1, aug_image_op2])
 
   reset()
   image_op = get_image(filename, 64)
-  aug_image_op1 = augment(image_op, 1)
-  aug_image_op2 = augment(image_op, 2)
+  aug_image_op1 = augment(image_op, patch_size, 1)
+  aug_image_op2 = augment(image_op, patch_size, 2)
   sess = K.get_session()
   aug_image1b, aug_image2b = sess.run([aug_image_op1, aug_image_op2])
 
@@ -1497,16 +1518,17 @@ def test_create_augmented_batch():
   reset()
   sess = K.get_session()
 
-  image = np.random.rand(64,64,3).astype(np.float32)
+  patch_size = 64
+  image = np.random.rand(patch_size, patch_size, 3).astype(np.float32)
 
   # wrong sizes
   with pytest.raises(AssertionError):
-    create_augmented_batch(image, 3)
-    create_augmented_batch(image, 31)
+    create_augmented_batch(image, 3, patch_size)
+    create_augmented_batch(image, 31, patch_size)
 
   # correct sizes
   def test(batch_size):
-    aug_images_tf = create_augmented_batch(image, batch_size)
+    aug_images_tf = create_augmented_batch(image, batch_size, patch_size)
     aug_images = sess.run(aug_images_tf)
     assert aug_images.shape == (batch_size,64,64,3)
 
@@ -1517,17 +1539,17 @@ def test_create_augmented_batch():
   # deterministic behavior
   def test2(batch_size):
     # different session runs
-    aug_images_1_tf = create_augmented_batch(image, batch_size)
+    aug_images_1_tf = create_augmented_batch(image, batch_size, patch_size)
     aug_images_1 = sess.run(aug_images_1_tf)
 
-    aug_images_2_tf = create_augmented_batch(image, batch_size)
+    aug_images_2_tf = create_augmented_batch(image, batch_size, patch_size)
     aug_images_2 = sess.run(aug_images_2_tf)
 
     assert np.array_equal(aug_images_1, aug_images_2)
 
     # same session run
-    aug_images_1_tf = create_augmented_batch(image, batch_size)
-    aug_images_2_tf = create_augmented_batch(image, batch_size)
+    aug_images_1_tf = create_augmented_batch(image, batch_size, patch_size)
+    aug_images_2_tf = create_augmented_batch(image, batch_size, patch_size)
     aug_images_1, aug_images_2 = sess.run([aug_images_1_tf, aug_images_2_tf])
 
     assert np.array_equal(aug_images_1, aug_images_2)

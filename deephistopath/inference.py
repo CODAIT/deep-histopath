@@ -182,36 +182,41 @@ def predict_mitoses_num_locations(model, model_name, threshold, ROI, tile_size=6
   ROI_height, ROI_width, ROI_channel = ROI.shape
 
   # gen_dense_coords function will handle the cases that the tile center point is outside of the ROI
-  tile_indices = list(gen_dense_coords(ROI_height, ROI_width, tile_size, tile_size - tile_overlap))
+  tile_indices = list(gen_dense_coords(ROI_height, ROI_width, tile_size - tile_overlap))
 
-  #tiles = (extract_patch(ROI, row, col, tile_size) for row, col in tile_indices)
-  tiles = (element[0] for element in gen_patches(ROI, tile_indices, tile_size, rotations=0,
-      translations=0, max_shift=0, p=1))
-  #tiles = [ROI]
   mitosis_location_scores = []
   predictions = np.empty((0, 1))
 
   if marginalization:
-    sess = K.get_session()
+    # create tiles larger than the intended size so that we can perform random rotations and
+    # random translations via cropping
+    d = 18  # TODO: keep this in sync with the training augmentation code
+    tiles = (element[0] for element in gen_patches(ROI, tile_indices, tile_size+2*d, rotations=0,
+        translations=0, max_shift=0, p=1))
 
     # create marginalization graph
     # NOTE: averaging over sigmoid outputs vs. logits may yield slightly different results, due
     # to numerical precision
-    prep_tile = tf.placeholder(tf.float32, shape=[tile_size, tile_size, tile_channel])
-    aug_tiles = create_augmented_batch(prep_tile, batch_size)  # create batch of aug versions
+    prep_tile = tf.placeholder(tf.float32, shape=[tile_size+2*d, tile_size+2*d, tile_channel])
+    aug_tiles = create_augmented_batch(prep_tile, batch_size, tile_size)  # create aug batch
     norm_tiles = normalize(aug_tiles, model_name)  # normalize augmented tiles
     aug_preds = model(norm_tiles)  # make predictions on normalized and augmented batch
     pred = marginalize(aug_preds)  # average predictions
 
     # make predictions
+    sess = K.get_session()
     for tile in tiles:
       prep_tile_np = (tile / 255).astype(np.float32)  # convert to values in [0,1]
-      pred_np, aug_preds_np = sess.run((pred, aug_preds), feed_dict={prep_tile: prep_tile_np, K.learning_phase(): 0})
+      pred_np, aug_preds_np = sess.run((pred, aug_preds),
+          feed_dict={prep_tile: prep_tile_np, K.learning_phase(): 0})
       predictions = np.concatenate((predictions, pred_np), axis=0)
 
-      print (f"The {predictions.shape[0]}th prediction: max: {np.max(aug_preds_np)}, min: {np.min(aug_preds_np)}, avg: {pred_np}")
+      print (f"The {predictions.shape[0]}th prediction: max: {np.max(aug_preds_np)}, min: "\
+             f"{np.min(aug_preds_np)}, avg: {pred_np}")
 
   else:
+    tiles = (element[0] for element in gen_patches(ROI, tile_indices, tile_size, rotations=0,
+        translations=0, max_shift=0, p=1))
     tile_batches = gen_batches(tiles, batch_size, include_partial=True)
     for tile_batch in tile_batches:
       tile_stack = np.stack(tile_batch, axis=0)
@@ -356,7 +361,7 @@ def predict_mitoses_help(model_file, model_name, index, file_partition,
       if save_mask and len(mitosis_location_score_list) > 0:
         mitosis_rows, mitosis_cols, pred_scores = zip(*mitosis_location_score_list)
         mitosis_location_list = list(zip(mitosis_rows, mitosis_cols))
-        mask = create_mask(ROI_size, ROI_size, mitosis_location_list, tile_size)
+        mask = create_mask(ROI_size, ROI_size, mitosis_location_list, 30)  # TODO: radius hyperparam
         mask_path = str(file_path).replace("data", "result").split(".")[0]
         pred_mark_ROI_path = str(file_path).replace("data", "result").split(".")[0]
 
