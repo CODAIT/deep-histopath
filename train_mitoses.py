@@ -178,7 +178,7 @@ def augment(image, patch_size, seed=None):
   #image = tf.random_crop(image, shape, seed=seed)  # random cropping back to original size
   # random rotation
   angle = tf.random_uniform([], minval=0, maxval=2*np.pi, seed=seed)
-  image = tf.contrib.image.rotate(image, angle, "BILINEAR", name="rotate_aug")
+  image = tf.contrib.image.rotate(image, angle, "BILINEAR")
   # crop to bounding box to allow for random translation crop, if the input image is large enough
   # note: translation distance: 7 µm = 30 pixels = max allowable euclidean pred distance from
   # actual mitosis
@@ -186,14 +186,23 @@ def augment(image, patch_size, seed=None):
   # can't crop from a square with side length of patch_size+30 or we run the risk of moving the
   # mitosis to a spot in the corner of the resulting image, which would be outside of the circle
   # radius, and thus we would be incorrect to label that image as positive.  We also want to impose
-  # some amount of buffer into our learned model, so we place an upper bound of ~25 pixels, instead
-  # of 30, and then math leads us to limiting the translation size across each dimension to 18.
-  # sqrt(18**2 + 18**2) = 25.45 = 6.25 µm
-  d = 18  # TODO: set this as a hyperparameter
-  crop_size = tf.minimum(shape[0], patch_size+2*d)  # note that h should be equal to w
-  image = tf.image.resize_image_with_crop_or_pad(image, crop_size, crop_size)
+  # some amount of buffer into our learned model, so we place an upper bound of `c` pixels on the
+  # distance.  We sample a distance along the height axis, compute a valid distance along the width
+  # axis that is upper bounded by a Euclidean translation distance of `c` in the worst case, crop
+  # the center of the image to this height and width, and then perform a random crop, yielding a
+  # patch for which the center is at most `c` pixels from the true center in terms of Euclidean
+  # distance.
+  # NOTE: In the dataset, all normal samples must be > 60 pixels from the center of a mitotic figure
+  # to avoid random crops that end up incorrectly within a mitotic region.
+  # c = 25 = sqrt(a**2 + b**2) = 6.25 µm
+  c = 25  # TODO: set this as a hyperparameter
+  a = tf.random_uniform([], minval=0, maxval=c, dtype=tf.int32, seed=seed)
+  b = tf.to_int32(tf.floor(tf.sqrt(tf.to_float(c**2 - a**2))))
+  crop_h = tf.minimum(shape[0], patch_size + a)
+  crop_w = tf.minimum(shape[1], patch_size + b)
+  image = tf.image.resize_image_with_crop_or_pad(image, crop_h, crop_w)
   # random central crop == random translation augmentation
-  image = tf.random_crop(image, [patch_size, patch_size, shape[-1]], seed=seed, name="crop_aug")
+  image = tf.random_crop(image, [patch_size, patch_size, shape[-1]], seed=seed)
   image = tf.image.random_flip_up_down(image, seed=seed)
   image = tf.image.random_flip_left_right(image, seed=seed)
   image = tf.image.random_brightness(image, 64/255, seed=seed)

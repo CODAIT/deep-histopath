@@ -582,7 +582,7 @@ if __name__ == "__main__":
            "(default: %(default)s)")
   parser.add_argument("--patch_size", type=int, default=64,
       help="integer length of the square patches to extract (default: %(default)s)")
-  parser.add_argument("--dist", type=int, default=30,
+  parser.add_argument("--dist", type=int, default=60,
       help="minimum distance between the centers of normal and mitotic patches "\
            "(default: %(default)s)")
   parser.add_argument("--rotations_train", type=int, default=5,
