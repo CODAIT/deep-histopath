@@ -15,17 +15,21 @@ from sklearn.model_selection import train_test_split
 from train_mitoses import normalize
 
 
-def create_mask(h, w, coords, size):
+def create_mask(h, w, coords, radius):
   """Create a binary image mask with locations of mitosis patches.
 
-  Areas equal to zero indicate normal regions, while areas equal to one
-  indicate mitosis regions.
+  Pixels equal to one indicate normal regions, while areas equal to one
+  indicate mitosis regions.  More specifically, all locations within a
+  Euclidean distance <= `radius` from the center of a true mitosis are
+  set to a value of one, and all other locations are set to a value of
+  zero.
 
   Args:
     h: Integer height of the mask.
     w: Integer width of the mask.
     coords: A list-like collection of (row, col) mitosis coordinates.
-    size: An integer size of the square patches to place on the mask.
+    radius: An integer radius of the circular patches to place on the
+      mask for each mitosis location.
 
   Returns:
     A binary mask of the same shape as `im` indicating where the
@@ -40,21 +44,12 @@ def create_mask(h, w, coords, size):
     assert 0 <= row <= h, "row is outside of the image height"
     assert 0 <= col <= w, "col is outside of the image width"
 
-    # (row, col) is the center, so compute upper and lower bounds of patch
-    half_size = round(size / 2)
-    row_lower = row - half_size
-    row_upper = row + half_size
-    col_lower = col - half_size
-    col_upper = col + half_size
-
-    # clip the bounds to the size of the image
-    row_lower = max(0, row_lower)
-    row_upper = min(row_upper, h)
-    col_lower = max(0, col_lower)
-    col_upper = min(col_upper, w)
+    # mitosis mask as a circle with radius `radius` pixels centered on the given location
+    y, x = np.ogrid[:h, :w]
+    mitosis_mask = np.sqrt((y-row)**2 + (x-col)**2) <= radius
 
     # indicate mitosis patch area on mask
-    mask[row_lower:row_upper, col_lower:col_upper] = True
+    mask = np.logical_or(mask, mitosis_mask)
 
   return mask
 
@@ -112,7 +107,7 @@ def extract_patch(im, row, col, size):
 
   return patch_padded
 
-def gen_dense_coords(h, w, size, stride):
+def gen_dense_coords(h, w, stride):
   """Generate centered (row, col) coordinates of patches densely from an
   image with striding.
 
@@ -122,15 +117,12 @@ def gen_dense_coords(h, w, size, stride):
   Args:
     h: Integer height of the image.
     w: Integer width of the image.
-    size: An integer size of the square patch to extract.
     stride: An integer number of pixels by which to shift in the
       sliding window for normal patches.
 
   Returns:
     Yields (row, col) integer coordinates of the center of a patch.
   """
-  # check that row, col, and size are within the image bounds
-  assert 1 < size <= min(h, w), "size must be > 1 and within the bounds of the image"
   assert stride > 0, "stride must be an integer > 0"
 
   # generate coordinates
@@ -139,7 +131,7 @@ def gen_dense_coords(h, w, size, stride):
       yield row, col  # centered coordinates for this patch
 
 
-def gen_normal_coords(mask, size, stride, threshold):
+def gen_normal_coords(mask, stride):
   """Generate (row, col) coordinates for normal patches.
 
   This generates coordinates for normal patches in a sliding window
@@ -149,27 +141,20 @@ def gen_normal_coords(mask, size, stride, threshold):
   Args:
     mask: A binary mask, indicating where the mitosis patches are
       located, of the same height and width as the region image.
-    size: An integer size of the square patch to extract.
     stride: An integer number of pixels by which to shift in the
       sliding window for normal patches.
-    threshold: A decimal inclusive upper bound on the percentage of
-      allowable overlap with mitosis patches.
 
   Returns:
     Yields (row, col) coordinates of a normal patch.
   """
-  # check that size is within the mask bounds
   assert np.ndim(mask) == 2, "mask must be of shape (h, w)"
   h, w = mask.shape
-  assert 1 < size <= min(h, w), "size must be > 1 and within the bounds of the image"
   assert stride > 0, "stride must be an integer > 0"
-  assert 0 <= threshold <= 1, "threshold must be a valid decimal percentage"
 
-  for row, col in gen_dense_coords(h, w, size, stride):
-    # extract patch from mask to check for overlap with mitosis patch
-    mask_patch = extract_patch(mask, row, col, size)
-    if np.mean(mask_patch) <= threshold:
-      yield row, col
+  for row, col in gen_dense_coords(h, w, stride):
+    # check that the point is not in a mitotic region
+      if not mask[row, col]:
+        yield row, col
 
 
 def gen_fp_coords(im, normal_coords, size, model, model_name, pred_threshold):
@@ -358,9 +343,9 @@ def save_patch(patch, path, lab, case, region, row, col, rotation, row_shift, co
   Image.fromarray(patch).save(file_path, subsampling=0, quality=100)
 
 
-def preprocess(images_path, labels_path, dataset, base_save_path, train_size, patch_size,
+def preprocess(images_path, labels_path, dataset, base_save_path, train_size, patch_size, dist,
     rotations_train, rotations_val, translations_train, translations_val, max_shift, stride_train,
-    stride_val, overlap_threshold, p_train, p_val, fp_path=None, model=None, model_name=None,
+    stride_val, p_train, p_val, fp_path=None, model=None, model_name=None, model_patch_size=None,
     pred_threshold=None, fp_rotations=None, fp_translations=None, seed=None):
   """Generate a mitosis detection patch dataset.
 
@@ -390,6 +375,8 @@ def preprocess(images_path, labels_path, dataset, base_save_path, train_size, pa
     train_size: Decimal percentage of data to include in the training
       set during the train/val split.
     patch_size: An integer size of the square patch to extract.
+    dist: An integer minimum Euclidean distance in pixels between a
+      normal patch and a mitotic patch.
     rotations_train: Integer number of evenly-spaced rotation augmented
       patches to extract for each mitosis in the training set, in
       addition to the centered mitosis patch.
@@ -408,8 +395,6 @@ def preprocess(images_path, labels_path, dataset, base_save_path, train_size, pa
       sliding window for normal patches in the training set.
     stride_val: An integer number of pixels by which to shift in the
       sliding window for normal patches in the validation set.
-    overlap_threshold: Decimal inclusive upper bound on the percentage
-      of overlap of normal patches with mitosis patches.
     p_train: A decimal probability of sampling each normal patch
       in the training set.
     p_val: A decimal probability of sampling each normal patch
@@ -420,6 +405,8 @@ def preprocess(images_path, labels_path, dataset, base_save_path, train_size, pa
     model: Optional Keras Model to use for false-positive oversampling.
     model_name: String indicating the model being used, which is used
       for determining the correct normalization.  TODO: replace this
+    model_patch_size: An integer size of a square patch that the model
+      expects as input.
     pred_threshold: Decimal threshold over which the patch is predicted
       as a positive case.
     fp_rotations: Integer number of evenly-spaced rotation augmented
@@ -528,14 +515,15 @@ def preprocess(images_path, labels_path, dataset, base_save_path, train_size, pa
               os.makedirs(save_path)  # create if necessary
             patch_gen = gen_patches(im, coords, patch_size, rotations, translations, max_shift, 1)
             for i, (patch, row, col, rot, row_shift, col_shift) in enumerate(patch_gen):
-              save_patch(patch, save_path, lab, case_name, region, row, col, rot, row_shift, col_shift, i)
+              save_patch(patch, save_path, lab, case_name, region, row, col, rot, row_shift,
+                  col_shift, i)
 
             # normal samples:
             # sample from all possible normal patches
             save_path = os.path.join(base_save_path, split_name, "normal")
             if not os.path.exists(save_path):
               os.makedirs(save_path)  # create if necessary
-            mask = create_mask(h, w, coords, patch_size)
+            mask = create_mask(h, w, coords, dist)
             # optional false_positive oversampling
             if fp_path is not None:
               fp_coords_path = os.path.join(fp_path, case_name, "{}.csv".format(region))
@@ -545,22 +533,24 @@ def preprocess(images_path, labels_path, dataset, base_save_path, train_size, pa
                 fp_coords = []  # no mitoses
             elif model is not None and split_name == "train":
               # oversample all false-positive cases in the training set
-              normal_coords_gen = gen_normal_coords(mask, patch_size, stride, overlap_threshold)
-              fp_coords = gen_fp_coords(im, normal_coords_gen, patch_size, model, model_name,
+              normal_coords_gen = gen_normal_coords(mask, stride)
+              fp_coords = gen_fp_coords(im, normal_coords_gen, model_patch_size, model, model_name,
                   pred_threshold)
             else:
               fp_coords = []
             fp_patch_gen = gen_patches(im, fp_coords, patch_size, fp_rotations, fp_translations,
                 max_shift, 1)
             for i, (patch, row, col, rot, row_shift, col_shift) in enumerate(fp_patch_gen):
-              save_patch(patch, save_path, lab, case_name, region, row, col, rot, row_shift, col_shift, i)
+              save_patch(patch, save_path, lab, case_name, region, row, col, rot, row_shift,
+                  col_shift, i)
             # regular sampling for normal cases
             # NOTE: This may sample the false-positive patches again, but that's fine for now
             if p > 0:
-              normal_coords_gen = gen_normal_coords(mask, patch_size, stride, overlap_threshold)
+              normal_coords_gen = gen_normal_coords(mask, stride)
               patch_gen = gen_patches(im, normal_coords_gen, patch_size, 0, 0, max_shift, p)
               for patch, row, col, rot, row_shift, col_shift in patch_gen:
-                save_patch(patch, save_path, lab, case_name, region, row, col, rot, row_shift, col_shift)
+                save_patch(patch, save_path, lab, case_name, region, row, col, rot, row_shift,
+                    col_shift)
 
 
 if __name__ == "__main__":
@@ -592,6 +582,9 @@ if __name__ == "__main__":
            "(default: %(default)s)")
   parser.add_argument("--patch_size", type=int, default=64,
       help="integer length of the square patches to extract (default: %(default)s)")
+  parser.add_argument("--dist", type=int, default=30,
+      help="minimum distance between the centers of normal and mitotic patches "\
+           "(default: %(default)s)")
   parser.add_argument("--rotations_train", type=int, default=5,
       help="number of evenly-spaced rotation augmented patches to extract for each mitosis in the "\
            "training set, in addition to the centered mitosis patch (default: %(default)s)")
@@ -615,9 +608,6 @@ if __name__ == "__main__":
   parser.add_argument("--stride_val", type=int,
       help="number of pixels by which to shift in the sliding window for normal patches in the "\
            "validation set (default: `patch_size*(3/4)`)")
-  parser.add_argument("--overlap_threshold", type=lambda x: check_float_range(x, 0, 1),
-      default=0.25, help="decimal inclusive upper bound on the percentage of overlap of normal "\
-                         "patches with mitosis patches (default: %(default)s)")
   parser.add_argument("--p_train", type=lambda x: check_float_range(x, 0, 1), default=1,
       help="probability of sampling each normal patch in the training set (default: %(default)s)")
   parser.add_argument("--p_val", type=lambda x: check_float_range(x, 0, 1), default=1,
@@ -630,6 +620,9 @@ if __name__ == "__main__":
   # TODO: replace this with unified normalization flag used here and for training
   parser.add_argument("--model_name",
       help="name of the model being used, which is used for determining the correct normalization "\
+           "(default: %(default)s)")
+  parser.add_argument("--model_patch_size", type=int, default=64,
+      help="integer length of a square patch that the model expects as input "\
            "(default: %(default)s)")
   parser.add_argument("--pred_threshold", type=float, default=0,
       help="threshold over which the patch is predicted as a positive case (default: %(default)s)")
@@ -683,11 +676,11 @@ if __name__ == "__main__":
   # preprocess!
   preprocess(images_path=args.images_path, labels_path=args.labels_path, dataset=args.dataset,
       base_save_path=args.save_path, train_size=args.train_size, patch_size=args.patch_size,
-      rotations_train=args.rotations_train, rotations_val=args.rotations_val,
+      dist=args.dist, rotations_train=args.rotations_train, rotations_val=args.rotations_val,
       translations_train=args.translations_train, translations_val=args.translations_val,
       max_shift=args.max_shift, stride_train=args.stride_train, stride_val=args.stride_val,
-      overlap_threshold=args.overlap_threshold, p_train=args.p_train, p_val=args.p_val,
-      fp_path=args.fp_path, model=model, model_name=args.model_name,
+      p_train=args.p_train, p_val=args.p_val, fp_path=args.fp_path, model=model,
+      model_name=args.model_name, model_patch_size=args.model_patch_size,
       pred_threshold=args.pred_threshold, fp_rotations=args.fp_rotations,
       fp_translations=args.fp_translations, seed=args.seed)
 
@@ -706,94 +699,105 @@ def test_create_mask():
 
   # check mask shape and type
   coords = [(50, 40)]
-  size = 32
-  mask = create_mask(h, w, coords, size)
+  radius = 32
+  mask = create_mask(h, w, coords, radius)
   assert mask.shape == (h, w)
   assert mask.dtype == bool
 
   # row error
   with pytest.raises(AssertionError):
     coords = [(-1, 1)]
-    size = 32
-    create_mask(h, w, [(-1, 1)], 32)
+    radius = 32
+    create_mask(h, w, coords, radius)
 
   # col error
   with pytest.raises(AssertionError):
     coords = [(1, -1)]
-    size = 32
-    create_mask(h, w, coords, size)
+    radius = 32
+    create_mask(h, w, coords, radius)
 
-  # size error
+  # radius error
 #  with pytest.raises(AssertionError):
 #    coords = [(1, 1)]
-#    size = h+1
-#    create_mask(h, w, coords, size)
+#    radius = h+1
+#    create_mask(h, w, coords, radius)
 
-  # another size error
+  # another radius error
 #  with pytest.raises(AssertionError):
 #    coords = [(1, 1)]
-#    size = w
-#    create_mask(h, w, coords, size)
+#    radius = w
+#    create_mask(h, w, coords, radius)
 
-  # another size error
+  # another radius error
 #  with pytest.raises(AssertionError):
 #    coords = [(1, 1)]
-#    size = 1
-#    create_mask(h, w, coords, size)
+#    radius = 1
+#    create_mask(h, w, coords, radius)
 
-  # row, col, size on boundary
+  # row, col, radius on boundary
   coords = [(0, 0)]
-  size = h
-  half_size = int(size / 2)
-  mask = create_mask(h, w, coords, size)
+  radius = h
+  half_radius = int(radius / 2)
+  mask = create_mask(h, w, coords, radius)
   correct_mask = np.zeros_like(mask)
-  correct_mask[0:half_size, 0:half_size] = 1
+  for r in range(h):
+    for c in range(w):
+      if np.sqrt(r**2 + c**2) <= radius:
+        correct_mask[r, c] = 1
   assert np.array_equal(mask, correct_mask)
 
-  # row, col, size on another boundary
+  # row, col, radius on another boundary
   coords = [(h, w)]
-  size = h
-  half_size = int(size / 2)
-  mask = create_mask(h, w, coords, size)
+  radius = h
+  half_radius = int(radius / 2)
+  mask = create_mask(h, w, coords, radius)
   correct_mask = np.zeros_like(mask)
-  correct_mask[-half_size:, -half_size:] = 1
+  for r in range(h):
+    for c in range(w):
+      if np.sqrt((r-h)**2 + (c-w)**2) <= radius:
+        correct_mask[r, c] = 1
   assert np.array_equal(mask, correct_mask)
 
-  # normal row, col, size
+  # normal row, col, radius
   coords = [(50, 40), (60, 50)]
-  size = 32
-  half_size = int(size / 2)
-  mask = create_mask(h, w, coords, size)
+  radius = 32
+  half_radius = int(radius / 2)
+  mask = create_mask(h, w, coords, radius)
   assert mask.shape == (h, w)
   correct_mask = np.zeros_like(mask)
   for row, col in coords:
-    correct_mask[row-half_size:row+half_size, col-half_size:col+half_size] = 1
+    for r in range(h):
+      for c in range(w):
+        if np.sqrt((r-row)**2 + (c-col)**2) <= radius:
+          correct_mask[r, c] = 1
   assert np.array_equal(mask, correct_mask)
 
-  # normal row, col, size w/ NumPy array
+  # normal row, col, radius w/ NumPy array
   coords = np.array([(50, 40), (60, 50)])
-  size = 32
-  half_size = int(size / 2)
-  mask = create_mask(h, w, coords, size)
+  radius = 32
+  half_radius = int(radius / 2)
+  mask = create_mask(h, w, coords, radius)
   assert mask.shape == (h, w)
   correct_mask = np.zeros_like(mask)
   for row, col in coords:
-    correct_mask[row-half_size:row+half_size, col-half_size:col+half_size] = 1
+    for r in range(h):
+      for c in range(w):
+        if np.sqrt((r-row)**2 + (c-col)**2) <= radius:
+          correct_mask[r, c] = 1
   assert np.array_equal(mask, correct_mask)
 
-  # row, col, size partially outside bounds
+  # row, col, radius partially outside bounds
   coords = [(50, 40), (10, 190)]
-  size = 32
-  half_size = int(size / 2)
-  mask = create_mask(h, w, coords, size)
+  radius = 32
+  half_radius = int(radius / 2)
+  mask = create_mask(h, w, coords, radius)
   assert mask.shape == (h, w)
   correct_mask = np.zeros_like(mask)
   for row, col in coords:
-    row_lower = max(0, row-half_size)
-    row_upper = min(h, row+half_size)
-    col_lower = max(0, col-half_size)
-    col_upper = min(w, col+half_size)
-    correct_mask[row_lower:row_upper, col_lower:col_upper] = 1
+    for r in range(h):
+      for c in range(w):
+        if np.sqrt((r-row)**2 + (c-col)**2) <= radius:
+          correct_mask[r, c] = 1
   assert np.array_equal(mask, correct_mask)
 
 
@@ -870,50 +874,40 @@ def test_gen_dense_coords():
   # create image
   h, w, c = 100, 200, 3
   im = np.random.rand(h, w, c)
-  size = 32
-  stride = size
+  stride = 32
 
   # check that it returns a generator object
-  assert isinstance(gen_dense_coords(h, w, size,  stride), types.GeneratorType)
-
-  # size error
-  with pytest.raises(AssertionError):
-    next(gen_dense_coords(h, w, h+1, stride))
-
-  # another size error
-  with pytest.raises(AssertionError):
-    next(gen_dense_coords(h, w, 1, stride))
+  assert isinstance(gen_dense_coords(h, w, stride), types.GeneratorType)
 
   # stride error
   with pytest.raises(AssertionError):
-    next(gen_dense_coords(h, w, size, -1))
+    next(gen_dense_coords(h, w, -1))
 
   # another stride error
   with pytest.raises(AssertionError):
-    next(gen_dense_coords(h, w, size, 0))
+    next(gen_dense_coords(h, w, 0))
 
   # normal
-  row, col = next(gen_dense_coords(h, w, size, stride))
+  row, col = next(gen_dense_coords(h, w, stride))
   assert 0 <= row <= h
   assert 0 <= col <= w
 
   # list of coords
-  coords = list(gen_dense_coords(h, w, size, stride))
+  coords = list(gen_dense_coords(h, w, stride))
   assert len(coords) > 0
 
   # check that stride < size produces more coordinates
-  coords2 = list(gen_dense_coords(h, w, size, 1))
+  coords2 = list(gen_dense_coords(h, w, 1))
   assert len(coords2) > len(coords)
 
   # check for correct centered coordinates
   h = 6
   w = 8
-  size = 4
-  stride = size - 2
+  stride = 2
   correct_coords = [(0, 0), (0, 2), (0, 4), (0, 6),
                     (2, 0), (2, 2), (2, 4), (2, 6),
                     (4, 0), (4, 2), (4, 4), (4, 6)]
-  coords = list(gen_dense_coords(h, w, size, stride))
+  coords = list(gen_dense_coords(h, w, stride))
   assert coords == correct_coords
 
 
@@ -924,50 +918,38 @@ def test_gen_normal_coords():
   # create mask
   h, w = 100, 200
   size = 32
+  radius = 30
   p = 0.6
-  threshold = 0.25
   stride = size
   mask = np.zeros((h, w), dtype=bool)
+  for r in range(h):
+    for c in range(w):
+      if np.sqrt(r**2 + c**2) <= radius:
+        mask[r, c] = 1
   mask[0:size, 0:size] = True
 
   # check that it returns a generator object
-  assert isinstance(gen_normal_coords(mask, size, stride, threshold), types.GeneratorType)
+  assert isinstance(gen_normal_coords(mask, stride), types.GeneratorType)
 
   # mask shape error
   with pytest.raises(AssertionError):
-    next(gen_normal_coords(np.zeros((h, w, 3)), size, stride, threshold))
-
-  # size error
-  with pytest.raises(AssertionError):
-    next(gen_normal_coords(mask, h+1, stride, threshold))
-
-  # another size error
-  with pytest.raises(AssertionError):
-    next(gen_normal_coords(mask, 1, stride, threshold))
+    next(gen_normal_coords(np.zeros((h, w, 3)), stride))
 
   # stride error
   with pytest.raises(AssertionError):
-    next(gen_normal_coords(mask, size, -1, threshold))
+    next(gen_normal_coords(mask, -1))
 
   # another stride error
   with pytest.raises(AssertionError):
-    next(gen_normal_coords(mask, size, 0, threshold))
-
-  # threshold error
-  with pytest.raises(AssertionError):
-    next(gen_normal_coords(mask, size, stride, -1))
-
-  # another threshold error
-  with pytest.raises(AssertionError):
-    next(gen_normal_coords(mask, size, stride, 2))
+    next(gen_normal_coords(mask, 0))
 
   # normal
-  row, col = next(gen_normal_coords(mask, size, stride, threshold))
+  row, col = next(gen_normal_coords(mask, stride))
   assert 0 <= row <= h
   assert 0 <= col <= w
 
   # list of coords
-  coords = list(gen_normal_coords(mask, size, stride, threshold))
+  coords = list(gen_normal_coords(mask, stride))
   assert len(coords) > 0
 
   # check for correct coords
@@ -975,16 +957,20 @@ def test_gen_normal_coords():
   w = 8
   size = 4
   stride = size - 2
-  threshold = 0.25
-  mask = np.zeros((h, w), dtype=bool)
-  mask[0:size, 0:size] = True
-  correct_coords = [(0, 6), (2, 6), (4, 4), (4, 6)]
-  coords = list(gen_normal_coords(mask, size, stride, threshold))
-  assert coords == correct_coords
+  mask = np.zeros((h, w))
+  mask[0:size, 0:size] = 1
+  correct_coords = []
+  for r in range(0, h, stride):
+    for c in range(0, w, stride):
+      if not mask[r, c]:
+        correct_coords.append([r, c])
+  correct_coords = np.array(correct_coords)
+  coords = np.array(list(gen_normal_coords(mask, stride)))
+  assert np.array_equal(coords, correct_coords)
 
   # check for situations in which no normal patches should be generated
   # - too much mitosis overlap
-  coords = list(gen_normal_coords(np.ones((100, 100)), 100, stride, 0))
+  coords = list(gen_normal_coords(np.ones((100, 100)), stride))
   assert len(coords) == 0
 
 
