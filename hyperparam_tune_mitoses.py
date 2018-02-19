@@ -158,7 +158,8 @@ def main(args=None):
     # train!
     try:
       train_mitoses.main(train_args)
-    except tf.errors.InvalidArgumentError:  # if values become nan or inf
+    except tf.errors.InvalidArgumentError as e:  # if values become nan or inf
+      print(e)
       print("Experiment failed!")
 
     # it is necessary to completely reset everything in between experiments

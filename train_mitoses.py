@@ -306,6 +306,13 @@ def process_dataset(dataset, model_name, patch_size, augmentation, marginalizati
     dataset = dataset.map(
         lambda image, label, filename: (augment(image, patch_size, seed), label, filename),
         num_parallel_calls=threads)
+  else:
+    # we are now generating larger original images to allow for random rotations & translations
+    # during augmentation, and thus if we don't apply augmentation, we need to ensure that the
+    # images are center cropped to the correct size.
+    dataset = dataset.map(lambda image, label, filename:
+        (tf.image.resize_image_with_crop_or_pad(image, patch_size, patch_size), label, filename),
+        num_parallel_calls=threads)
 
   # marginalize (typically at eval time)
   if marginalization:
@@ -327,8 +334,8 @@ def create_dataset(path, model_name, patch_size, batch_size, shuffle, augmentati
   """Create a dataset.
 
   Args:
-    path: String path to the generated validation image patches.
-      This should contain folders for each class.
+    path: String path to the generated image patches.  This should
+      contain folders for each class.
     model_name: String indicating the model to use.
     patch_size: Integer length to which the square patches will be
       resized.
