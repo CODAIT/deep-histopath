@@ -1000,6 +1000,7 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
     tf.summary.scalar("sens", sens, collections=["epoch"])
     tf.summary.scalar("f1", f1, collections=["epoch"])
     tf.summary.scalar("f1_max", f1_max, collections=["epoch"])
+    tf.summary.scalar("thresh_max", thresh_max, collections=["epoch"])
     summary_lib.pr_curve_raw_data_op(
         name='pr_curve',
         true_positive_counts=pr.tp,
