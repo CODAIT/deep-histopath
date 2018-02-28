@@ -13,6 +13,28 @@ from PIL import Image
 from sklearn.model_selection import train_test_split
 
 from train_mitoses import normalize
+#from deephistopath.inference import gen_batches
+
+
+# TODO: update library so that this can be imported without accidentally pulling in spark
+def gen_batches(iterator, batch_size, include_partial=True):
+  """ generate the tile batches from the tile iterator
+  Args:
+    iterator: the tile iterator
+    batch_size: batch size
+    include_partial: boolean value to keep the partial batch or not
+
+  Return:
+    the iterator for the tile batches
+  """
+  batch = []
+  for item in iterator:
+    batch.append(item)
+    if len(batch) == batch_size:
+      yield batch
+      batch = []
+  if len(batch) > 0 and include_partial:
+    yield batch
 
 
 def create_mask(h, w, coords, radius):
@@ -157,7 +179,7 @@ def gen_normal_coords(mask, stride):
         yield row, col
 
 
-def gen_fp_coords(im, normal_coords, size, model, model_name, pred_threshold):
+def gen_fp_coords(im, normal_coords, size, model, model_name, pred_threshold, batch_size):
   """Generate (row, col) coordinates for false-positive patches.
 
   This generates false-positive patch coordinates by making predictions
@@ -169,8 +191,8 @@ def gen_fp_coords(im, normal_coords, size, model, model_name, pred_threshold):
   0.5, the corresponding logit threshold would be 0).
 
   Args:
-    im: An image stored as a np.uint8 NumPy array of shape (h, w, c) with
-      values in [0, 255].
+    im: An image stored as a np.uint8 NumPy array of shape (h, w, c)
+      with values in [0, 255].
     normal_coords: An iterable collection of (row, col) coordinates.
     size: An integer size of the square patch to extract.
     model: Keras model to use for false-positive oversampling.
@@ -178,16 +200,21 @@ def gen_fp_coords(im, normal_coords, size, model, model_name, pred_threshold):
       for determining the correct normalization.  TODO: replace this
     pred_threshold: Decimal threshold over which the patch is predicted
       as a positive case.
+    batch_size: Size of batches to process, for performance
+      improvements.
 
   Returns:
     Yields (row, col) coordinates of false-positive patches.
   """
-  for row, col in normal_coords:
-    patch = extract_patch(im, row, col, size)
-    norm_patch = normalize(patch / 255, model_name)
-    out = model.predict_on_batch(np.expand_dims(norm_patch, 0))[0]
-    if out > pred_threshold:
-      yield row, col
+  patches_rc = ((extract_patch(im, row, col, size), row, col) for row, col in normal_coords)
+  patch_rc_batches = gen_batches(patches_rc, batch_size, include_partial=True)
+  for patch_rc_batch in patch_rc_batches:
+    patch_batch, row_batch, col_batch = zip(*patch_rc_batch)
+    norm_patch_batch = normalize((np.array(patch_batch) / 255).astype(np.float32), model_name)
+    out_batch = np.squeeze(model.predict_on_batch(norm_patch_batch))
+    for out, row, col in zip(out_batch, row_batch, col_batch):
+      if out > pred_threshold:
+        yield row, col
 
 
 def gen_random_translation(h, w, row, col, max_shift):
@@ -346,7 +373,7 @@ def save_patch(patch, path, lab, case, region, row, col, rotation, row_shift, co
 def preprocess(images_path, labels_path, dataset, base_save_path, train_size, patch_size, dist,
     rotations_train, rotations_val, translations_train, translations_val, max_shift, stride_train,
     stride_val, p_train, p_val, fp_path=None, model=None, model_name=None, model_patch_size=None,
-    pred_threshold=None, fp_rotations=None, fp_translations=None, seed=None):
+    model_batch_size=None, pred_threshold=None, fp_rotations=None, fp_translations=None, seed=None):
   """Generate a mitosis detection patch dataset.
 
   This generates train/val datasets of mitosis/normal image patches for
@@ -407,6 +434,8 @@ def preprocess(images_path, labels_path, dataset, base_save_path, train_size, pa
       for determining the correct normalization.  TODO: replace this
     model_patch_size: An integer size of a square patch that the model
       expects as input.
+    model_batch_size: Size of batches to process, for performance
+      improvements.
     pred_threshold: Decimal threshold over which the patch is predicted
       as a positive case.
     fp_rotations: Integer number of evenly-spaced rotation augmented
@@ -535,7 +564,7 @@ def preprocess(images_path, labels_path, dataset, base_save_path, train_size, pa
               # oversample all false-positive cases in the training set
               normal_coords_gen = gen_normal_coords(mask, stride)
               fp_coords = gen_fp_coords(im, normal_coords_gen, model_patch_size, model, model_name,
-                  pred_threshold)
+                  pred_threshold, model_batch_size)
             else:
               fp_coords = []
             fp_patch_gen = gen_patches(im, fp_coords, patch_size, fp_rotations, fp_translations,
@@ -624,6 +653,8 @@ if __name__ == "__main__":
   parser.add_argument("--model_patch_size", type=int, default=64,
       help="integer length of a square patch that the model expects as input "\
            "(default: %(default)s)")
+  parser.add_argument("--model_batch_size", type=int, default=128,
+      help="size of the batches to predict on (default: %(default)s)")
   parser.add_argument("--pred_threshold", type=float, default=0,
       help="threshold over which the patch is predicted as a positive case (default: %(default)s)")
   parser.add_argument("--fp_rotations", type=int, default=5,
@@ -681,8 +712,8 @@ if __name__ == "__main__":
       max_shift=args.max_shift, stride_train=args.stride_train, stride_val=args.stride_val,
       p_train=args.p_train, p_val=args.p_val, fp_path=args.fp_path, model=model,
       model_name=args.model_name, model_patch_size=args.model_patch_size,
-      pred_threshold=args.pred_threshold, fp_rotations=args.fp_rotations,
-      fp_translations=args.fp_translations, seed=args.seed)
+      model_batch_size=args.model_batch_size, pred_threshold=args.pred_threshold,
+      fp_rotations=args.fp_rotations, fp_translations=args.fp_translations, seed=args.seed)
 
 
 # ---
