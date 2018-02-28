@@ -211,7 +211,7 @@ def gen_fp_coords(im, normal_coords, size, model, model_name, pred_threshold, ba
   for patch_rc_batch in patch_rc_batches:
     patch_batch, row_batch, col_batch = zip(*patch_rc_batch)
     norm_patch_batch = normalize((np.array(patch_batch) / 255).astype(np.float32), model_name)
-    out_batch = np.squeeze(model.predict_on_batch(norm_patch_batch))
+    out_batch = np.squeeze(model.predict_on_batch(norm_patch_batch), axis=1)
     for out, row, col in zip(out_batch, row_batch, col_batch):
       if out > pred_threshold:
         yield row, col
