@@ -10,7 +10,6 @@ import sys
 import keras
 from keras import backend as K
 from keras.applications import VGG16, VGG19  #, ResNet50
-from resnet50 import ResNet50
 from keras.initializers import VarianceScaling
 from keras.layers import Dense, Dropout, Flatten, GlobalAveragePooling2D, Input, Lambda, concatenate
 from keras.models import Model
@@ -19,6 +18,7 @@ import numpy as np
 import tensorflow as tf
 from tensorboard import summary as summary_lib
 
+from resnet50 import ResNet50
 
 # data
 
@@ -1179,6 +1179,10 @@ def main(argv=None):
            "(default: %%y-%%m-%%d_%%H:%%M:%%S_{model})")
   parser.add_argument("--exp_name_suffix", default=None,
       help="suffix to add to experiment name (default: all parameters concatenated together)")
+  parser.add_argument("--exp_full_path", default=None,
+      help="full path in which to store the experiment. either this or the --exp_parent_path, "\
+           "--exp_name, --exp_name_suffix flags as a group can be used. typically, this would "\
+           "be used to resume an existing experiment (default: %(default)s)")
   parser.add_argument("--model", default="vgg",
       choices=["logreg", "vgg", "vgg_new", "vgg19", "resnet", "resnet_new"],
       help="name of the model to use in ['logreg', 'vgg', 'vgg_new', 'vgg19', 'resnet', "\
@@ -1247,30 +1251,31 @@ def main(argv=None):
   train_path = os.path.join(args.patches_path, "train")
   val_path = os.path.join(args.patches_path, "val")
 
-  if args.exp_name is None:
-    date = datetime.strftime(datetime.today(), "%y%m%d_%H%M%S")
-    args.exp_name = date + "_" + args.model
-  if args.exp_name_suffix is None:
-    args.exp_name_suffix = "patch_size_{args.patch_size}_batch_size_{args.train_batch_size}_"\
-                           "clf_epochs_{args.clf_epochs}_ft_epochs_{args.finetune_epochs}_"\
-                           "clf_lr_{args.clf_lr}_ft_lr_{args.finetune_lr}_"\
-                           "ft_mom_{args.finetune_momentum}_ft_layers_{args.finetune_layers}_"\
-                           "l2_{args.l2}_aug_{args.augment}_marg_{args.marginalize}_"\
-                           "over_{args.oversample}".format(args=args)
-  full_exp_name = args.exp_name + "_" + args.exp_name_suffix
-  exp_path = os.path.join(args.exp_parent_path, full_exp_name)
+  if args.exp_full_path is None:
+    if args.exp_name is None:
+      date = datetime.strftime(datetime.today(), "%y%m%d_%H%M%S")
+      args.exp_name = date + "_" + args.model
+    if args.exp_name_suffix is None:
+      args.exp_name_suffix = "patch_size_{args.patch_size}_batch_size_{args.train_batch_size}_"\
+                             "clf_epochs_{args.clf_epochs}_ft_epochs_{args.finetune_epochs}_"\
+                             "clf_lr_{args.clf_lr}_ft_lr_{args.finetune_lr}_"\
+                             "ft_mom_{args.finetune_momentum}_ft_layers_{args.finetune_layers}_"\
+                             "l2_{args.l2}_aug_{args.augment}_marg_{args.marginalize}_"\
+                             "over_{args.oversample}".format(args=args)
+    full_exp_name = args.exp_name + "_" + args.exp_name_suffix
+    args.exp_full_path = os.path.join(args.exp_parent_path, full_exp_name)
 
   # make an experiment folder
-  if not os.path.exists(exp_path):
-    os.makedirs(os.path.join(exp_path, "checkpoints"))
-  print("experiment directory: {}".format(exp_path))
+  if not os.path.exists(args.exp_full_path):
+    os.makedirs(os.path.join(args.exp_full_path, "checkpoints"))
+  print("experiment directory: {}".format(args.exp_full_path))
 
   # create a random seed if needed
   if args.seed is None:
     args.seed = np.random.randint(1e9)
 
   # save args to a file in the experiment folder, appending if it exists
-  with open(os.path.join(exp_path, 'args.txt'), 'a') as f:
+  with open(os.path.join(args.exp_full_path, 'args.txt'), 'a') as f:
     json.dump(args.__dict__, f)
     print("", file=f)
     # can be read in later with
@@ -1278,7 +1283,7 @@ def main(argv=None):
     #  args = json.load(f)
 
   # save command line invocation to txt file for ease of rerunning the exact experiment
-  with open(os.path.join(exp_path, 'invoke.txt'), 'a') as f:
+  with open(os.path.join(args.exp_full_path, 'invoke.txt'), 'a') as f:
     # NOTE: since we sometimes call this `main` function via the hyperparam search script, we can't
     # always use `sys.argv` because it would always refer to the outer invocation, i.e., the
     # invocation of the hyperparam search script.
@@ -1289,11 +1294,11 @@ def main(argv=None):
       f.write("python3 " + " ".join(sys.argv) + "\n")
 
   # copy this script to the experiment folder
-  shutil.copy2(os.path.realpath(__file__), exp_path)
+  shutil.copy2(os.path.realpath(__file__), args.exp_full_path)
 
   # train!
-  train(train_path=train_path, val_path=val_path, exp_path=exp_path, model_name=args.model,
-      model_weights=args.model_weights, patch_size=args.patch_size,
+  train(train_path=train_path, val_path=val_path, exp_path=args.exp_full_path,
+      model_name=args.model, model_weights=args.model_weights, patch_size=args.patch_size,
       train_batch_size=args.train_batch_size, val_batch_size=args.val_batch_size,
       clf_epochs=args.clf_epochs, finetune_epochs=args.finetune_epochs, clf_lr=args.clf_lr,
       finetune_lr=args.finetune_lr, finetune_momentum=args.finetune_momentum,
