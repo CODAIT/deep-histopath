@@ -1011,7 +1011,7 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
         recall=pr.recall,
         num_thresholds=num_thresholds,
         display_name='pr curve',
-        description=f"PR curve for {num_thresholds} thresholds.",
+        description="PR curve for {num_thresholds} thresholds.".format(num_thresholds=num_thresholds),
         collections=["epoch"])
   epoch_summaries = tf.summary.merge_all("epoch")
 
@@ -1063,9 +1063,12 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
       op_values = sess.run([f1, f1_max, thresh_max, ppv, sens, acc, mean_loss, epoch_summaries])
       (f1_val, f1_max_val, thresh_max_val, ppv_val, sens_val, acc_val, mean_loss_val,
           summary_str) = op_values
-      print(f"---epoch {global_epoch}, train f1 (@ 0.5): {f1_val}, train max f1 "\
-            f"(@ {thresh_max_val}): {f1_max_val}, train ppv: {ppv_val}, train sens: {sens_val}, "\
-            f"train acc: {acc_val}, train avg loss: {mean_loss_val}")
+      print("---epoch {global_epoch}, train f1 (@ 0.5): {f1_val}, train max f1 "\
+            "(@ {thresh_max_val}): {f1_max_val}, train ppv: {ppv_val}, train sens: {sens_val}, "\
+            "train acc: {acc_val}, train avg loss: {mean_loss_val}"\
+			.format(global_epoch=global_epoch, f1_val=f1_val, acc_val=acc_val, \
+			mean_loss_val=mean_loss_val, thresh_max_val=thresh_max_val, \
+			f1_max_val=f1_max_val, ppv_val=ppv_val, sens_val=sens_val))
       train_writer.add_summary(summary_str, global_epoch)
       sess.run(metric_reset_ops)
 
@@ -1090,17 +1093,21 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
       op_values = sess.run([f1, f1_max, thresh_max, ppv, sens, acc, mean_loss, epoch_summaries])
       (f1_val, f1_max_val, thresh_max_val, ppv_val, sens_val, acc_val, mean_loss_val,
           summary_str) = op_values
-      print(f"---epoch {global_epoch}, val f1 (@ 0.5): {f1_val}, val max f1 (@ {thresh_max_val}): "\
-            f"{f1_max_val}, val ppv: {ppv_val}, val sens: {sens_val}, val acc: {acc_val}, "\
-            f"val avg loss: {mean_loss_val}")
+      print("---epoch {global_epoch}, val f1 (@ 0.5): {f1_val}, val max f1 (@ {thresh_max_val}): "\
+            "{f1_max_val}, val ppv: {ppv_val}, val sens: {sens_val}, val acc: {acc_val}, "\
+            "val avg loss: {mean_loss_val}"\
+			.format(global_epoch=global_epoch, f1_val=f1_val,\
+			 thresh_max_val=thresh_max_val, f1_max_val=f1_max_val, ppv_val=ppv_val, \
+			 sens_val=sens_val, acc_val=acc_val, mean_loss_val=mean_loss_val))
       val_writer.add_summary(summary_str, global_epoch)
       sess.run(metric_reset_ops)
 
       # save model
       if checkpoint:
         keras_filename = os.path.join(exp_path, "checkpoints",
-            f"{f1_max_val:.5}_f1max_{f1_val:.5}_f1_{mean_loss_val:.5}_loss_{global_epoch}_"\
-            f"epoch_model.hdf5")
+            "{f1_max_val:.5}_f1max_{f1_val:.5}_f1_{mean_loss_val:.5}_loss_{global_epoch}_"\
+            "epoch_model.hdf5"\
+			.format(f1_max_val=f1_max_val, f1_val=f1_val, mean_loss_val=mean_loss_val, global_epoch=global_epoch))
         model_tower.save(keras_filename, include_optimizer=False)  # keras model
         saver.save(sess, checkpoint_filename)  # full TF graph
         with open(global_step_epoch_filename, "wb") as f:
@@ -1202,12 +1209,12 @@ def main(argv=None):
     date = datetime.strftime(datetime.today(), "%y%m%d_%H%M%S")
     args.exp_name = date + "_" + args.model
   if args.exp_name_suffix is None:
-    args.exp_name_suffix = f"patch_size_{args.patch_size}_batch_size_{args.train_batch_size}_"\
-                           f"clf_epochs_{args.clf_epochs}_ft_epochs_{args.finetune_epochs}_"\
-                           f"clf_lr_{args.clf_lr}_ft_lr_{args.finetune_lr}_"\
-                           f"ft_mom_{args.finetune_momentum}_ft_layers_{args.finetune_layers}_"\
-                           f"l2_{args.l2}_aug_{args.augment}_marg_{args.marginalize}_"\
-                           f"over_{args.oversample}"
+    args.exp_name_suffix = "patch_size_{args.patch_size}_batch_size_{args.train_batch_size}_"\
+                           "clf_epochs_{args.clf_epochs}_ft_epochs_{args.finetune_epochs}_"\
+                           "clf_lr_{args.clf_lr}_ft_lr_{args.finetune_lr}_"\
+                           "ft_mom_{args.finetune_momentum}_ft_layers_{args.finetune_layers}_"\
+                           "l2_{args.l2}_aug_{args.augment}_marg_{args.marginalize}_"\
+                           "over_{args.oversample}".format(args=args)
   full_exp_name = args.exp_name + "_" + args.exp_name_suffix
   exp_path = os.path.join(args.exp_parent_path, full_exp_name)
 
@@ -1235,7 +1242,7 @@ def main(argv=None):
     # invocation of the hyperparam search script.
     if argv is not None:  # called from hpo script
       fname = os.path.basename(__file__)
-      f.write(f"python3 {fname} " + " ".join(argv) + "\n")
+      f.write("python3 {fname} ".format(fname=fname) + " ".join(argv) + "\n")
     else:  # called directly
       f.write("python3 " + " ".join(sys.argv) + "\n")
 
@@ -2022,4 +2029,3 @@ def test_normalize_dtype():
     assert np.allclose(pred1b, pred2b)  # ouch!
   assert np.allclose(predtf1, pred1a)
   assert np.allclose(predtf1, predtf2)  # equivalent results in tf
-
