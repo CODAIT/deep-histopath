@@ -487,8 +487,12 @@ def preprocess(images_path, labels_path, dataset, base_save_path, train_size, pa
     # split cases into train/val sets
     lab_cases = labs[lab]
     # TODO: extract this out into a separate function
-    train, val = train_test_split(lab_cases, train_size=train_size, test_size=1-train_size,
-        random_state=seed)
+    if train_size < 1:
+      train, val = train_test_split(lab_cases, train_size=train_size, test_size=1-train_size,
+          random_state=seed)
+    else:
+      train = lab_cases
+      val = []
     train_args = ('train', train, translations_train, rotations_train, p_train, stride_train)
     val_args = ('val', val, translations_val, rotations_val, p_val, stride_val)
     for split_args in [train_args, val_args]:
