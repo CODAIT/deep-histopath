@@ -22,7 +22,7 @@ def main(args=None):
       help="parent path in which to store experiment folders (default: %(default)s)")
   parser.add_argument("--models", nargs='*', default=["vgg", "resnet"],
       help="list of names of models to use, where the names can be selected from ['logreg', "\
-           "'vgg', 'vgg19', 'resnet'] (default: %(default)s)")
+           "'vgg', 'vgg_new', 'vgg19', 'resnet', 'resnet_new'] (default: %(default)s)")
   parser.add_argument("--model_weights", default=None,
       help="optional hdf5 file containing the initial weights of the model. if not supplied, the "\
            "model will start with pretrained weights from imagenet. if this is set, the `models` "\

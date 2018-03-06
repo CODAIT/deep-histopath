@@ -438,8 +438,30 @@ def create_model(model_name, input_shape, images):
     # to the breast cancer problem
     # recommend fine-tuning last 4 layers
     #with tf.device("/cpu"):
-    #inputs = Input(shape=input_shape)
-    model_base = VGG16(include_top=False, input_shape=input_shape, input_tensor=images)  #inputs)
+    model_base = VGG16(include_top=False, input_shape=input_shape, input_tensor=images)
+    inputs = model_base.inputs
+    x = model_base.output
+    x = Flatten()(x)
+    #x = GlobalAveragePooling2D()(x)
+    #x = Dropout(0.5)(x)
+    #x = Dropout(0.1)(x)
+    #x = Dense(256, activation='relu', name='fc1')(x)
+    #x = Dense(256, kernel_initializer="he_normal",
+    #    kernel_regularizer=keras.regularizers.l2(l2))(x)
+    #x = Dropout(0.5)(x)
+    #x = Dropout(0.1)(x)
+    #x = Dense(256, activation='relu', name='fc2')(x)
+    #x = Dense(256, kernel_initializer="he_normal",
+    #    kernel_regularizer=keras.regularizers.l2(l2))(x)
+    # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
+    logits = Dense(1, kernel_initializer="glorot_normal")(x)
+    model_tower = Model(inputs=inputs, outputs=logits, name="model")
+
+  elif model_name == "vgg_new":
+    # train a new vgg16-like model from scratch on inputs in [-1, 1].
+    #with tf.device("/cpu"):
+    model_base = VGG16(
+        include_top=False, input_shape=input_shape, input_tensor=images, weights=None)
     inputs = model_base.inputs
     x = model_base.output
     x = Flatten()(x)
@@ -483,7 +505,25 @@ def create_model(model_name, input_shape, images):
     # batch norm not being well defined for shared settings, but it makes it quite annoying in
     # this context.  to "fix" it, we define it by directly passing in the `images` tensor
     # https://github.com/fchollet/keras/issues/2827
-    model_base = ResNet50(include_top=False, input_shape=input_shape, input_tensor=images) #inputs)
+    model_base = ResNet50(include_top=False, input_shape=input_shape, input_tensor=images)
+    inputs = model_base.inputs
+    x = model_base.output
+    x = Flatten()(x)
+    #x = GlobalAveragePooling2D()(x)
+    # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
+    logits = Dense(1, kernel_initializer="glorot_normal")(x)
+    model_tower = Model(inputs=inputs, outputs=logits, name="model")
+
+  elif model_name == "resnet_new":
+    # train a new resnet50-like model from scratch on inputs in [-1, 1].
+    #with tf.device("/cpu"):
+    # NOTE: there is an issue in keras with using batch norm with model templating, i.e.,
+    # defining a model with generic inputs and then calling it on a tensor.  the issue stems from
+    # batch norm not being well defined for shared settings, but it makes it quite annoying in
+    # this context.  to "fix" it, we define it by directly passing in the `images` tensor
+    # https://github.com/fchollet/keras/issues/2827
+    model_base = ResNet50(
+        include_top=False, input_shape=input_shape, input_tensor=images, weights=None)
     inputs = model_base.inputs
     x = model_base.output
     x = Flatten()(x)
@@ -1139,9 +1179,10 @@ def main(argv=None):
            "(default: %%y-%%m-%%d_%%H:%%M:%%S_{model})")
   parser.add_argument("--exp_name_suffix", default=None,
       help="suffix to add to experiment name (default: all parameters concatenated together)")
-  parser.add_argument("--model", default="vgg", choices=["logreg", "vgg", "vgg19", "resnet"],
-      help="name of the model to use in ['logreg', 'vgg', 'vgg19', 'resnet'] "\
-           "(default: %(default)s)")
+  parser.add_argument("--model", default="vgg",
+      choices=["logreg", "vgg", "vgg_new", "vgg19", "resnet", "resnet_new"],
+      help="name of the model to use in ['logreg', 'vgg', 'vgg_new', 'vgg19', 'resnet', "\
+           "'resnet_new'] (default: %(default)s)")
   parser.add_argument("--model_weights", default=None,
       help="optional hdf5 file containing the initial weights of the model. if not supplied, the "\
            "model will start with pretrained weights from imagenet. (default: %(default)s)")
