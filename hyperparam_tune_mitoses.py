@@ -98,43 +98,43 @@ def main(args=None):
     # TODO: extract experiment setup code in the training script main function into a class so that
     # we can reuse it from here
     train_args = []
-    train_args.append(f"--patches_path={args.patches_path}")
+    train_args.append("--patches_path={args.patches_path}".format(args=args))
 
-    train_args.append(f"--exp_parent_path={args.exp_parent_path}")
+    train_args.append("--exp_parent_path={args.exp_parent_path}".format(args=args))
 
     model = random.choice(args.models)
-    train_args.append(f"--model={model}")
+    train_args.append("--model={model}".format(model=model))
 
     if args.model_weights:
-      train_args.append(f"--model_weights={args.model_weights}")
+      train_args.append("--model_weights={args.model_weights}".format(args=args))
 
     train_batch_size = random.choice(args.train_batch_sizes)
-    train_args.append(f"--train_batch_size={train_batch_size}")
+    train_args.append("--train_batch_size={train_batch_size}".format(train_batch_size=train_batch_size))
 
-    train_args.append(f"--val_batch_size={args.val_batch_size}")
+    train_args.append("--val_batch_size={args.val_batch_size}".format(args=args))
 
-    train_args.append(f"--clf_epochs={args.clf_epochs}")
+    train_args.append("--clf_epochs={args.clf_epochs}".format(args=args))
 
-    train_args.append(f"--finetune_epochs={args.finetune_epochs}")
+    train_args.append("--finetune_epochs={args.finetune_epochs}".format(args=args))
 
     clf_lr_lb, clf_lr_ub = args.clf_lr_range
     clf_lr = np.random.uniform(clf_lr_lb, clf_lr_ub)
-    train_args.append(f"--clf_lr={clf_lr}")
+    train_args.append("--clf_lr={clf_lr}".format(clf_lr=clf_lr))
 
     finetune_lr_lb, finetune_lr_ub = args.finetune_lr_range
     finetune_lr = np.random.uniform(finetune_lr_lb, finetune_lr_ub)
-    train_args.append(f"--finetune_lr={finetune_lr}")
+    train_args.append("--finetune_lr={finetune_lr}".format(finetune_lr=finetune_lr))
 
     finetune_momentum_lb, finetune_momentum_ub = args.finetune_momentum_range
     finetune_momentum = np.random.uniform(finetune_momentum_lb, finetune_momentum_ub)
-    train_args.append(f"--finetune_momentum={finetune_momentum}")
+    train_args.append("--finetune_momentum={finetune_momentum}".format(finetune_momentum=finetune_momentum))
 
     finetune_layers = random.choice(args.finetune_layers)
-    train_args.append(f"--finetune_layers={finetune_layers}")
+    train_args.append("--finetune_layers={finetune_layers}".format(finetune_layers=finetune_layers))
 
     l2_lb, l2_ub = args.l2_range
     l2 = np.random.uniform(l2_lb, l2_ub)
-    train_args.append(f"--l2={l2}")
+    train_args.append("--l2={l2}".format(l2=l2))
 
     if args.augment:
       train_args.append("--augment")
@@ -147,13 +147,13 @@ def main(args=None):
     if args.oversample:
       train_args.append("--oversample")
 
-    train_args.append(f"--num_gpus={args.num_gpus}")
+    train_args.append("--num_gpus={args.num_gpus}".format(args=args))
 
-    train_args.append(f"--threads={args.threads}")
+    train_args.append("--threads={args.threads}".format(args=args))
 
-    train_args.append(f"--prefetch_batches={args.prefetch_batches}")
+    train_args.append("--prefetch_batches={args.prefetch_batches}".format(args=args))
 
-    train_args.append(f"--log_interval={args.log_interval}")
+    train_args.append("--log_interval={args.log_interval}".format(args=args))
 
     # train!
     try:
