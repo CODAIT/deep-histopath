@@ -40,7 +40,9 @@ def get_image(filename, patch_size):
   image = tf.image.convert_image_dtype(image, dtype=tf.float32)  # float32 [0, 1)
   # TODO: remove this
   #image = tf.image.resize_images(image, [patch_size, patch_size])  # float32 [0, 1)
-  #with tf.control_dependencies([tf.assert_type(image, tf.float32, image.dtype)]):
+  #with tf.control_dependencies(
+  #    [tf.assert_type(image, tf.float32, image.dtype),
+  #     tf.verify_tensor_all_finite(image, "image tensor contains NaN or INF values"]):
   return image
 
 
@@ -711,15 +713,10 @@ def create_resettable_metric(metric, scope, **metric_kwargs):  # prob safer to o
 def initialize_variables(sess):
   """Initialize variables for training.
 
-  This initializes all tensor variables in the graph, as well as
-  variables for the global step and epoch, the latter two of which
-  are returned as native Python variables.
+  This initializes all tensor variables in the graph.
 
   Args:
     sess: A TensorFlow Session.
-
-  Returns:
-    Integer global step and global epoch values.
   """
   # NOTE: Keras keeps track of the variables that are initialized, and any call to
   # `K.get_session()`, which is even used internally, will include logic to initialize variables.
@@ -750,9 +747,6 @@ def initialize_variables(sess):
   global_init_op = tf.variables_initializer(uninitialized_variables)
   local_init_op = tf.local_variables_initializer()
   sess.run([global_init_op, local_init_op])
-  global_step = 0  # training step
-  global_epoch = 0  # training epoch
-  return global_step, global_epoch
 
 
 # training
@@ -885,6 +879,10 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
 
   # optim
   with tf.name_scope("optim"):
+    global_step_op = tf.train.get_or_create_global_step()
+    global_epoch_op = tf.Variable(0, trainable=False, name="global_epoch", dtype=tf.int32)
+    global_epoch_increment_op = tf.assign_add(global_epoch_op, 1, name="global_epoch_increment")
+
     # TODO: extract this into a function with tests
     # TODO: rework the `finetune_layers` param to include starting from the beg/end
     # classifier
@@ -892,11 +890,11 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
     for layer in model_base.layers:
       layer.trainable = False
     # add any weight regularization to the base loss for unfrozen layers:
-    clf_loss = data_loss + l2*compute_l2_reg_loss(model_tower)  # including all weight regularization
+    clf_loss = data_loss + l2*compute_l2_reg_loss(model_tower)
     clf_opt = tf.train.AdamOptimizer(clf_lr)
     clf_grads_and_vars = clf_opt.compute_gradients(clf_loss, var_list=model_tower.trainable_weights)
     #clf_train_op = opt.minimize(clf_loss, var_list=model.trainable_weights)
-    clf_apply_grads_op = clf_opt.apply_gradients(clf_grads_and_vars)
+    clf_apply_grads_op = clf_opt.apply_gradients(clf_grads_and_vars, global_step=global_step_op)
     clf_model_update_ops = model_tower.updates
     clf_train_op = tf.group(clf_apply_grads_op, *clf_model_update_ops)
 
@@ -908,12 +906,18 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
       for layer in model_base.layers[-finetune_layers:]:
         layer.trainable = True
     # add any weight regularization to the base loss for unfrozen layers:
-    finetune_loss = data_loss + l2*compute_l2_reg_loss(model_tower)  # including all weight regularization
+    finetune_loss = data_loss + l2*compute_l2_reg_loss(model_tower)
+    # TODO: enable this, or use `tf.train.piecewise_constant` with `global_epoch`
+    #lr = tf.train.exponential_decay(
+    #    finetune_lr, global_step_op,
+    #    decay_steps=decay_steps, decay_rate=decay_rate,
+    #    staircase=True)
     finetune_opt = tf.train.MomentumOptimizer(finetune_lr, finetune_momentum, use_nesterov=True)
-    finetune_grads_and_vars = finetune_opt.compute_gradients(finetune_loss,
-        var_list=model_tower.trainable_weights)
+    finetune_grads_and_vars = finetune_opt.compute_gradients(
+        finetune_loss, var_list=model_tower.trainable_weights)
     #finetune_train_op = opt.minimize(finetune_loss, var_list=model.trainable_weights)
-    finetune_apply_grads_op = finetune_opt.apply_gradients(finetune_grads_and_vars)
+    finetune_apply_grads_op = finetune_opt.apply_gradients(
+        finetune_grads_and_vars, global_step=global_step_op)
     finetune_model_update_ops = model_tower.updates
     finetune_train_op = tf.group(finetune_apply_grads_op, *finetune_model_update_ops)
 
@@ -1021,12 +1025,11 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
 
   # save ops
   checkpoint_filename = os.path.join(exp_path, "model.ckpt")
-  global_step_epoch_filename = os.path.join(exp_path, "global_step_epoch.pickle")
   saver = tf.train.Saver()
 
   # initialize stuff
   sess = K.get_session()
-  global_step, global_epoch = initialize_variables(sess)
+  initialize_variables(sess)
 
   # debugger
   #from tensorflow.python import debug as tf_debug
@@ -1034,17 +1037,17 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
 
   if resume:
     saver.restore(sess, checkpoint_filename)
-    with open(global_step_epoch_filename, "rb") as f:
-      global_step, global_epoch = pickle.load(f)
-      global_epoch += 1  # start next epoch
 
   # TODO: extract this into a function with tests
   # training loop for new classifier layers and fine-tuning
   for train_op, epochs in [(clf_train_op, clf_epochs), (finetune_train_op, finetune_epochs)]:
-    for _ in range(global_epoch, global_epoch+epochs):  # allow for resuming of training
+    global_epoch_start = sess.run(global_epoch_op)
+    for _ in range(global_epoch_start, global_epoch_start+epochs):  # allow for resuming of training
+      global_epoch = sess.run(global_epoch_op)
       # training
       sess.run(train_init_op)
       while True:
+        global_step = sess.run(global_step_op)
         try:
           if log_interval > 0 and global_step % log_interval == 0:
             # train, update metrics, & log stuff
@@ -1056,7 +1059,6 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
           else:
             # train & update metrics
             _, _ = sess.run([train_op, metric_update_ops], feed_dict={K.learning_phase(): 1})
-          global_step += 1
         except tf.errors.OutOfRangeError:
           break
       # log average training metrics for epoch & reset
@@ -1066,9 +1068,9 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
       print("---epoch {global_epoch}, train f1 (@ 0.5): {f1_val}, train max f1 "\
             "(@ {thresh_max_val}): {f1_max_val}, train ppv: {ppv_val}, train sens: {sens_val}, "\
             "train acc: {acc_val}, train avg loss: {mean_loss_val}"\
-			.format(global_epoch=global_epoch, f1_val=f1_val, acc_val=acc_val, \
-			mean_loss_val=mean_loss_val, thresh_max_val=thresh_max_val, \
-			f1_max_val=f1_max_val, ppv_val=ppv_val, sens_val=sens_val))
+            .format(global_epoch=global_epoch, f1_val=f1_val, acc_val=acc_val,
+              mean_loss_val=mean_loss_val, thresh_max_val=thresh_max_val,
+              f1_max_val=f1_max_val, ppv_val=ppv_val, sens_val=sens_val))
       train_writer.add_summary(summary_str, global_epoch)
       sess.run(metric_reset_ops)
 
@@ -1096,28 +1098,27 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
       print("---epoch {global_epoch}, val f1 (@ 0.5): {f1_val}, val max f1 (@ {thresh_max_val}): "\
             "{f1_max_val}, val ppv: {ppv_val}, val sens: {sens_val}, val acc: {acc_val}, "\
             "val avg loss: {mean_loss_val}"\
-			.format(global_epoch=global_epoch, f1_val=f1_val,\
-			 thresh_max_val=thresh_max_val, f1_max_val=f1_max_val, ppv_val=ppv_val, \
-			 sens_val=sens_val, acc_val=acc_val, mean_loss_val=mean_loss_val))
+            .format(global_epoch=global_epoch, f1_val=f1_val,
+              thresh_max_val=thresh_max_val, f1_max_val=f1_max_val, ppv_val=ppv_val,
+              sens_val=sens_val, acc_val=acc_val, mean_loss_val=mean_loss_val))
       val_writer.add_summary(summary_str, global_epoch)
       sess.run(metric_reset_ops)
+
+      sess.run(global_epoch_increment_op)  # global_epoch += 1
 
       # save model
       if checkpoint:
         keras_filename = os.path.join(exp_path, "checkpoints",
             "{f1_max_val:.5}_f1max_{f1_val:.5}_f1_{mean_loss_val:.5}_loss_{global_epoch}_"\
             "epoch_model.hdf5"\
-			.format(f1_max_val=f1_max_val, f1_val=f1_val, mean_loss_val=mean_loss_val, global_epoch=global_epoch))
+            .format(f1_max_val=f1_max_val, f1_val=f1_val, mean_loss_val=mean_loss_val,
+              global_epoch=global_epoch))
         model_tower.save(keras_filename, include_optimizer=False)  # keras model
         saver.save(sess, checkpoint_filename)  # full TF graph
-        with open(global_step_epoch_filename, "wb") as f:
-          pickle.dump((global_step, global_epoch), f)  # step & epoch
         print("Saved model file to {}".format(keras_filename))
 
       val_writer.flush()
       #train_writer.flush()
-
-      global_epoch += 1
 
 
 
