@@ -7,18 +7,18 @@ import pickle
 import shutil
 import sys
 
+# TODO: move to tf.keras
 import keras
 from keras import backend as K
-from keras.applications import VGG16, VGG19  #, ResNet50
-from keras.initializers import VarianceScaling
+from keras.applications import VGG16, VGG19
 from keras.layers import Dense, Dropout, Flatten, GlobalAveragePooling2D, Input, Lambda, concatenate
 from keras.models import Model
-#from keras.utils import multi_gpu_model
 import numpy as np
 import tensorflow as tf
 from tensorboard import summary as summary_lib
 
 from resnet50 import ResNet50
+import resnet
 
 # data
 
@@ -204,7 +204,7 @@ def augment(image, patch_size, seed=None):
   crop_w = tf.minimum(shape[1], patch_size + b)
   image = tf.image.resize_image_with_crop_or_pad(image, crop_h, crop_w)
   # random central crop == random translation augmentation
-  image = tf.random_crop(image, [patch_size, patch_size, shape[-1]], seed=seed)
+  image = tf.random_crop(image, [patch_size, patch_size, 3], seed=seed)
   image = tf.image.random_flip_up_down(image, seed=seed)
   image = tf.image.random_flip_left_right(image, seed=seed)
   image = tf.image.random_brightness(image, 64/255, seed=seed)
@@ -426,7 +426,7 @@ def create_model(model_name, input_shape, images):
   """
   if model_name == "logreg":
     # logistic regression classifier
-    model_base = keras.models.Sequential()  # dummy since we aren't fine-tuning this model
+    model_base = None
     inputs = Input(shape=input_shape, tensor=images)
     x = Flatten()(inputs)
     # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
@@ -531,6 +531,10 @@ def create_model(model_name, input_shape, images):
     # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
     logits = Dense(1, kernel_initializer="glorot_normal")(x)
     model_tower = Model(inputs=inputs, outputs=logits, name="model")
+
+  elif model_name == "resnet_custom":
+    model_base = None
+    model_tower = resnet.ResNet(images, input_shape)
 
   else:
     raise Exception("model name unknown: {}".format(model_name))
@@ -661,12 +665,18 @@ def compute_data_loss(labels, logits):
   return loss
 
 
-def compute_l2_reg_loss(model, include_frozen=False):
-  """Compute L2 loss of trainable model weights, excluding biases.
+def compute_l2_reg_loss(model, include_frozen=False, reg_final=True, reg_biases=False):
+  """Compute L2 loss of trainable model weights.
+
+  This places a Gaussian prior with mean 0 std 1 on each of the model
+  parameters.
 
   Args:
     model: A Keras Model object.
     include_frozen: Boolean for whether or not to ignore frozen layers.
+    reg_final: Boolean for whether or not to regularize the final
+      logits-producing layer.
+    reg_biases: Boolean for whether or not to regularize biases.
 
   Returns:
     The L2 regularization loss of all trainable (i.e., unfrozen) model
@@ -674,10 +684,23 @@ def compute_l2_reg_loss(model, include_frozen=False):
     are used.
   """
   weights = []
-  for layer in model.layers:
+  if reg_final:
+    end = None
+  else:  # don't regularize the final function that produces logits
+    end = -1 if not model.layers[-1].name.startswith("flatten") else -2
+  for layer in model.layers[:end]:
     if layer.trainable or include_frozen:
-      if hasattr(layer, 'kernel'):
+      if hasattr(layer, 'kernel'):  # conv, dense
         weights.append(layer.kernel)
+      elif hasattr(layer, 'gamma'):  # batch norm scale
+        weights.append(layer.gamma)
+      if reg_biases:
+        # TODO: generally, we don't regularize the biases, but could we determine a probabilistic
+        # motivation to do this?
+        if hasattr(layer, 'bias'):
+          weights.append(layer.bias)
+        elif hasattr(layer, 'beta'):
+          weights.append(layer.beta)
   l2_loss = tf.add_n([tf.nn.l2_loss(w) for w in weights])
   return l2_loss
 
@@ -793,8 +816,8 @@ def initialize_variables(sess):
 
 def train(train_path, val_path, exp_path, model_name, model_weights, patch_size, train_batch_size,
     val_batch_size, clf_epochs, finetune_epochs, clf_lr, finetune_lr, finetune_momentum,
-    finetune_layers, l2, augmentation, marginalization, oversampling, num_gpus, threads,
-    prefetch_batches, log_interval, checkpoint, resume, seed):
+    finetune_layers, l2, reg_biases, reg_final, augmentation, marginalization, oversampling,
+    num_gpus, threads, prefetch_batches, log_interval, checkpoint, resume, seed):
   """Train a model.
 
   Args:
@@ -823,8 +846,11 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
       pretrained portion of the model to fine-tune.  The new classifier
       layers will still be trained during fine-tuning as well.
     l2: Float L2 global regularization value.
-    augmentation: Boolean for whether or not to apply random augmentation
-      to the images.
+    reg_biases: Boolean for whether or not to regularize biases.
+    reg_final: Boolean for whether or not to regularize the final
+      logits-producing layer.
+    augmentation: Boolean for whether or not to apply random
+      augmentation to the images.
     marginalization: Boolean for whether or not to use noise
       marginalization when evaluating the validation set.  If True, then
       each image in the validation set will be expanded to a batch of
@@ -861,6 +887,15 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
   # results.  The one benefit is that the classification layers will be created deterministically.
   np.random.seed(seed)
   tf.set_random_seed(seed)
+
+  # create session, force Keras to use it
+  config = tf.ConfigProto(allow_soft_placement=True)#, log_device_placement=True)
+  sess = tf.Session(config=config)
+  K.set_session(sess)
+
+  # debugger
+  #from tensorflow.python import debug as tf_debug
+  #sess = tf_debug.LocalCLIDebugWrapperSession(sess)
 
   # data
   with tf.name_scope("data"):
@@ -909,7 +944,8 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
   with tf.name_scope("loss"):
     with tf.control_dependencies([tf.assert_equal(tf.shape(labels)[0], tf.shape(logits)[0])]):
       data_loss = compute_data_loss(labels, logits)
-      reg_loss = compute_l2_reg_loss(model_tower, include_frozen=True)  # including all weights
+      reg_loss = compute_l2_reg_loss(
+          model_tower, include_frozen=True, reg_final=reg_final, reg_biases=reg_biases)
       loss = data_loss + l2*reg_loss
       # TODO: enable this and test it
       # use l2 reg during training, but not during validation.  Otherwise, more fine-tuning will
@@ -918,48 +954,57 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
       #loss = tf.cond(K.learning_phase(), lambda: data_loss + l2*reg_loss, lambda: data_loss)
 
   # optim
+  # TODO: extract this into a function with tests
   with tf.name_scope("optim"):
     global_step_op = tf.train.get_or_create_global_step()
     global_epoch_op = tf.Variable(0, trainable=False, name="global_epoch", dtype=tf.int32)
     global_epoch_increment_op = tf.assign_add(global_epoch_op, 1, name="global_epoch_increment")
 
-    # TODO: extract this into a function with tests
     # TODO: rework the `finetune_layers` param to include starting from the beg/end
     # classifier
     # - freeze all pre-trained model layers.
-    for layer in model_base.layers:
-      layer.trainable = False
+    if model_base:
+      for layer in model_base.layers:
+        layer.trainable = False
+      var_list = model_tower.trainable_weights
+    else:
+      var_list = None  # i.e., use all available variables if we are not using transfer learning
     # add any weight regularization to the base loss for unfrozen layers:
-    clf_loss = data_loss + l2*compute_l2_reg_loss(model_tower)
+    clf_reg_loss = compute_l2_reg_loss(model_tower, reg_final=reg_final, reg_biases=reg_biases)
+    clf_loss = data_loss + l2*clf_reg_loss
     clf_opt = tf.train.AdamOptimizer(clf_lr)
-    clf_grads_and_vars = clf_opt.compute_gradients(clf_loss, var_list=model_tower.trainable_weights)
-    #clf_train_op = opt.minimize(clf_loss, var_list=model.trainable_weights)
-    clf_apply_grads_op = clf_opt.apply_gradients(clf_grads_and_vars, global_step=global_step_op)
+    clf_grads_and_vars = clf_opt.compute_gradients(clf_loss, var_list=var_list)
+    # update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     clf_model_update_ops = model_tower.updates
-    clf_train_op = tf.group(clf_apply_grads_op, *clf_model_update_ops)
+    with tf.control_dependencies(clf_model_update_ops):
+      clf_train_op = clf_opt.apply_gradients(clf_grads_and_vars, global_step=global_step_op)
 
     # finetuning
     # - unfreeze a portion of the pre-trained model layers.
     # note, could make this arbitrary, but for now, fine-tune some number of layers at the *end* of
     # the pretrained portion of the model
-    if finetune_layers != 0:
-      for layer in model_base.layers[-finetune_layers:]:
-        layer.trainable = True
+    if model_base:
+      if finetune_layers != 0:
+        for layer in model_base.layers[-finetune_layers:]:
+          layer.trainable = True
+      var_list = model_tower.trainable_weights
+    else:
+      var_list = None  # i.e., use all available variables if we are not using transfer learning
     # add any weight regularization to the base loss for unfrozen layers:
-    finetune_loss = data_loss + l2*compute_l2_reg_loss(model_tower)
+    finetune_reg_loss = compute_l2_reg_loss(model_tower, reg_final=reg_final, reg_biases=reg_biases)
+    finetune_loss = data_loss + l2*finetune_reg_loss
     # TODO: enable this, or use `tf.train.piecewise_constant` with `global_epoch`
     #lr = tf.train.exponential_decay(
     #    finetune_lr, global_step_op,
     #    decay_steps=decay_steps, decay_rate=decay_rate,
     #    staircase=True)
     finetune_opt = tf.train.MomentumOptimizer(finetune_lr, finetune_momentum, use_nesterov=True)
-    finetune_grads_and_vars = finetune_opt.compute_gradients(
-        finetune_loss, var_list=model_tower.trainable_weights)
-    #finetune_train_op = opt.minimize(finetune_loss, var_list=model.trainable_weights)
-    finetune_apply_grads_op = finetune_opt.apply_gradients(
-        finetune_grads_and_vars, global_step=global_step_op)
+    finetune_grads_and_vars = finetune_opt.compute_gradients(finetune_loss, var_list=var_list)
+    # update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     finetune_model_update_ops = model_tower.updates
-    finetune_train_op = tf.group(finetune_apply_grads_op, *finetune_model_update_ops)
+    with tf.control_dependencies(finetune_model_update_ops):
+      finetune_train_op = finetune_opt.apply_gradients(
+          finetune_grads_and_vars, global_step=global_step_op)
 
   # metrics
   with tf.name_scope("metrics"):
@@ -1068,12 +1113,7 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
   saver = tf.train.Saver()
 
   # initialize stuff
-  sess = K.get_session()
   initialize_variables(sess)
-
-  # debugger
-  #from tensorflow.python import debug as tf_debug
-  #sess = tf_debug.LocalCLIDebugWrapperSession(sess)
 
   if resume:
     saver.restore(sess, checkpoint_filename)
@@ -1184,9 +1224,9 @@ def main(argv=None):
            "--exp_name, --exp_name_suffix flags as a group can be used. typically, this would "\
            "be used to resume an existing experiment (default: %(default)s)")
   parser.add_argument("--model", default="vgg",
-      choices=["logreg", "vgg", "vgg_new", "vgg19", "resnet", "resnet_new"],
+      choices=["logreg", "vgg", "vgg_new", "vgg19", "resnet", "resnet_new", "resnet_custom"],
       help="name of the model to use in ['logreg', 'vgg', 'vgg_new', 'vgg19', 'resnet', "\
-           "'resnet_new'] (default: %(default)s)")
+           "'resnet_new', 'resnet_custom'] (default: %(default)s)")
   parser.add_argument("--model_weights", default=None,
       help="optional hdf5 file containing the initial weights of the model. if not supplied, the "\
            "model will start with pretrained weights from imagenet. (default: %(default)s)")
@@ -1213,6 +1253,12 @@ def main(argv=None):
           "(default: %(default)s)")
   parser.add_argument("--l2", type=float, default=1e-3,
       help="amount of l2 weight regularization (default: %(default)s)")
+  parser.add_argument("--reg_biases", default=False, action="store_true",
+      help="whether or not to regularize biases. (default: %(default)s)")
+  parser.add_argument("--skip_reg_final", dest="reg_final", action="store_false",
+      help="whether or not to skip regularization of the logits-producing layer "\
+           "(default: %(default)s)")
+  parser.set_defaults(reg_final=True)
   augment_parser = parser.add_mutually_exclusive_group(required=False)
   augment_parser.add_argument("--augment", dest="augment", action="store_true",
       help="apply random augmentation to the training images (default: True)")
@@ -1302,9 +1348,10 @@ def main(argv=None):
       train_batch_size=args.train_batch_size, val_batch_size=args.val_batch_size,
       clf_epochs=args.clf_epochs, finetune_epochs=args.finetune_epochs, clf_lr=args.clf_lr,
       finetune_lr=args.finetune_lr, finetune_momentum=args.finetune_momentum,
-      finetune_layers=args.finetune_layers, l2=args.l2, augmentation=args.augment,
-      marginalization=args.marginalize, oversampling=args.oversample, num_gpus=args.num_gpus,
-      threads=args.threads, prefetch_batches=args.prefetch_batches, log_interval=args.log_interval,
+      finetune_layers=args.finetune_layers, l2=args.l2, reg_biases=args.reg_biases,
+      reg_final=args.reg_final, augmentation=args.augment, marginalization=args.marginalize,
+      oversampling=args.oversample, num_gpus=args.num_gpus, threads=args.threads,
+      prefetch_batches=args.prefetch_batches, log_interval=args.log_interval,
       checkpoint=args.checkpoint, resume=args.resume, seed=args.seed)
 
 
@@ -1499,7 +1546,7 @@ def test_normalize_unnormalize():
     assert np.all(np.max(x_norm, axis=(0,1)) > 0)
     assert np.all(np.min(x_norm, axis=(0,1)) >= -1)
     assert np.all(np.min(x_norm, axis=(0,1)) < 0)
-    assert np.allclose(x_unnorm, x_np, rtol=1e-4)  #, atol=1e-7)
+    assert np.allclose(x_unnorm, x_np, rtol=1e-4, atol=1e-7)
 
   # batch of examples
   def test_batch(x_batch_norm, x_batch_unnorm):
@@ -1682,7 +1729,8 @@ def test_compute_l2_reg_loss():
   # layer will remain uninitialized
   input_shape = (224,224,3)
   inputs = Input(shape=input_shape)
-  x = Dense(1)(inputs)
+  x = keras.layers.Conv2D(1, 3)(inputs)
+  x = keras.layers.BatchNormalization()(x)
   logits = Dense(1)(x)
   model = Model(inputs=inputs, outputs=logits, name="model")
 
@@ -1693,21 +1741,43 @@ def test_compute_l2_reg_loss():
 
   # all layers
   l2_reg = compute_l2_reg_loss(model)
-  correct_l2_reg = tf.nn.l2_loss(model.layers[1].kernel) + tf.nn.l2_loss(model.layers[2].kernel)
+  correct_l2_reg = (
+      tf.nn.l2_loss(model.layers[1].kernel)
+      + tf.nn.l2_loss(model.layers[2].gamma)
+      + tf.nn.l2_loss(model.layers[3].kernel))
   l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
   assert np.array_equal(l2_reg_val, correct_l2_reg_val)
 
   # subset of layers
   model.layers[1].trainable = False
   l2_reg = compute_l2_reg_loss(model)
-  correct_l2_reg = tf.nn.l2_loss(model.layers[2].kernel)
+  correct_l2_reg = tf.nn.l2_loss(model.layers[2].gamma) + tf.nn.l2_loss(model.layers[3].kernel)
   l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
   assert np.array_equal(l2_reg_val, correct_l2_reg_val)
 
   # include frozen layers
   model.layers[1].trainable = False
   l2_reg = compute_l2_reg_loss(model, True)
-  correct_l2_reg = tf.nn.l2_loss(model.layers[1].kernel) + tf.nn.l2_loss(model.layers[2].kernel)
+  correct_l2_reg = (
+      tf.nn.l2_loss(model.layers[1].kernel)
+      + tf.nn.l2_loss(model.layers[2].gamma)
+      + tf.nn.l2_loss(model.layers[3].kernel))
+  l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
+  assert np.array_equal(l2_reg_val, correct_l2_reg_val)
+  model.layers[1].trainable = True
+
+  # skip final layer
+  l2_reg = compute_l2_reg_loss(model, reg_final=False)
+  correct_l2_reg = tf.nn.l2_loss(model.layers[1].kernel) + tf.nn.l2_loss(model.layers[2].gamma)
+  l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
+  assert np.array_equal(l2_reg_val, correct_l2_reg_val)
+
+  # include biases
+  l2_reg = compute_l2_reg_loss(model, reg_biases=True)
+  correct_l2_reg = (
+      tf.nn.l2_loss(model.layers[1].kernel) + tf.nn.l2_loss(model.layers[1].bias)
+      + tf.nn.l2_loss(model.layers[2].gamma) + tf.nn.l2_loss(model.layers[2].beta)
+      + tf.nn.l2_loss(model.layers[3].kernel) + tf.nn.l2_loss(model.layers[3].bias))
   l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
   assert np.array_equal(l2_reg_val, correct_l2_reg_val)
 
@@ -1720,8 +1790,11 @@ def test_create_model():
     model, model_base = create_model(model_name, input_shape, x)
     assert model.input_shape == (None, *input_shape)
     assert model.input == x
-    assert len(model_base.layers) == base_layers
-    assert model.layers[:len(model_base.layers)] == model_base.layers
+    if base_layers == 0:
+      assert model_base is None
+    else:
+      assert len(model_base.layers) == base_layers
+      assert model.layers[:len(model_base.layers)] == model_base.layers
     assert model.output_shape == (None, 1)
 
   # logreg
@@ -1743,6 +1816,11 @@ def test_create_model():
   reset()
   sess = K.get_session()
   test("resnet", 174)
+
+  # resnet custom
+  reset()
+  sess = K.get_session()
+  test("resnet_custom", 0)
 
 
 def test_compute_data_loss():
@@ -2076,3 +2154,27 @@ def test_normalize_dtype():
     assert np.allclose(pred1b, pred2b)  # ouch!
   assert np.allclose(predtf1, pred1a)
   assert np.allclose(predtf1, predtf2)  # equivalent results in tf
+
+
+def test_model_updates():
+  reset()
+
+  # create model with a mix of pretrained and new weights
+  # NOTE: the pretrained layers will be initialized by Keras on creation, while the new Dense
+  # layer will remain uninitialized
+  input_shape = (224,224,3)
+  inputs = Input(shape=input_shape)
+  bn = keras.layers.BatchNormalization()
+  x = bn(inputs)
+  logits = Dense(1)(x)
+  model = Model(inputs=inputs, outputs=logits, name="model")
+
+  # all trainable
+  assert len(model.updates) > 0
+  assert model.updates == bn._updates
+
+  # bn not trainable
+  bn.trainable = False
+  assert len(model.updates) == 0
+  assert model.updates != bn._updates
+
