@@ -59,7 +59,7 @@ def res_block(xin, dbottle, dout, k, stride):
   return x
 
 
-def ResNet(xin, shape):
+def ResNet(xin, shape):  # camel case makes it feel like a class -- eventually we'll subclass Model
   """Custom ResNet model with pre-activation residual blocks.
 
   Reference:
@@ -93,6 +93,7 @@ def ResNet(xin, shape):
     print(out)
     ```
   """
+  # TODO: `tf.keras.layers` -> `tf.layers`
   assert len(shape) == 3
   depth_axis = 3 if tf.keras.backend.image_data_format() == 'channels_last' else 1
 

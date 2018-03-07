@@ -7,7 +7,6 @@ import sys
 
 import numpy as np
 import tensorflow as tf
-import keras.backend as K
 
 import train_mitoses
 
@@ -22,7 +21,8 @@ def main(args=None):
       help="parent path in which to store experiment folders (default: %(default)s)")
   parser.add_argument("--models", nargs='*', default=["vgg", "resnet"],
       help="list of names of models to use, where the names can be selected from ['logreg', "\
-           "'vgg', 'vgg_new', 'vgg19', 'resnet', 'resnet_new'] (default: %(default)s)")
+           "'vgg', 'vgg_new', 'vgg19', 'resnet', 'resnet_new', 'resnet_custom'] "\
+           "(default: %(default)s)")
   parser.add_argument("--model_weights", default=None,
       help="optional hdf5 file containing the initial weights of the model. if not supplied, the "\
            "model will start with pretrained weights from imagenet. if this is set, the `models` "\
@@ -51,6 +51,12 @@ def main(args=None):
            "as well) (default: %(default)s)")
   parser.add_argument("--l2_range", nargs=2, type=float, default=[0, 1e-2],
       help="half-closed interval for the amount of l2 weight regularization (default: %(default)s)")
+  parser.add_argument("--reg_biases", default=False, action="store_true",
+      help="whether or not to regularize biases. (default: %(default)s)")
+  parser.add_argument("--skip_reg_final", dest="reg_final", action="store_false",
+      help="whether or not to skip regularization of the logits-producing layer "\
+           "(default: %(default)s)")
+  parser.set_defaults(reg_final=True)
   augment_parser = parser.add_mutually_exclusive_group(required=False)
   augment_parser.add_argument("--augment", dest="augment", action="store_true",
       help="apply random augmentation to the training images (default: True)")
@@ -136,6 +142,12 @@ def main(args=None):
     l2 = np.random.uniform(l2_lb, l2_ub)
     train_args.append("--l2={l2}".format(l2=l2))
 
+    if args.reg_biases:
+      train_args.append("--reg_biases")
+
+    if not args.reg_final:
+      train_args.append("--skip_reg_final")
+
     if args.augment:
       train_args.append("--augment")
     else:
@@ -163,7 +175,8 @@ def main(args=None):
       print("Experiment failed!")
 
     # it is necessary to completely reset everything in between experiments
-    K.clear_session()
+    tf.reset_default_graph()
+    tf.keras.backend.clear_session()
 
 
 if __name__ == "__main__":

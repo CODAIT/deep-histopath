@@ -7,18 +7,12 @@ import pickle
 import shutil
 import sys
 
-# TODO: move to tf.keras
-import keras
-from keras import backend as K
-from keras.applications import VGG16, VGG19
-from keras.layers import Dense, Dropout, Flatten, GlobalAveragePooling2D, Input, Lambda, concatenate
-from keras.models import Model
 import numpy as np
 import tensorflow as tf
-from tensorboard import summary as summary_lib
+import tensorboard as tb
 
-from resnet50 import ResNet50
 import resnet
+import resnet50
 
 # data
 
@@ -260,7 +254,7 @@ def marginalize(x):
   values.  Typically, this would be used with logits for a batch of
   augmented versions of a single image, or for the associated batch
   of labels.  This is only performed at test time when
-  `K.learning_phase() == 0`.
+  `tf.keras.backend.learning_phase() == 0`.
 
   Args:
     x: A Tensor of shape (n,...).
@@ -270,7 +264,7 @@ def marginalize(x):
     dimension.
   """
   avg_x = tf.reduce_mean(x, axis=0, keepdims=True, name="avg_x")
-  x = tf.cond(tf.logical_not(K.learning_phase()), lambda: avg_x, lambda: x)
+  x = tf.cond(tf.logical_not(tf.keras.backend.learning_phase()), lambda: avg_x, lambda: x)
   return x
 
 
@@ -427,72 +421,74 @@ def create_model(model_name, input_shape, images):
   if model_name == "logreg":
     # logistic regression classifier
     model_base = None
-    inputs = Input(shape=input_shape, tensor=images)
-    x = Flatten()(inputs)
-    # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
-    logits = Dense(1, kernel_initializer="glorot_normal")(x)
-    model_tower = Model(inputs=inputs, outputs=logits, name="model")
+    inputs = tf.keras.layers.Input(shape=input_shape, tensor=images)
+    x = tf.keras.layers.Flatten()(inputs)
+    # init tf.keras.layers.Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
+    logits = tf.keras.layers.Dense(1, kernel_initializer="glorot_normal")(x)
+    model_tower = tf.keras.Model(inputs=inputs, outputs=logits, name="model")
 
   elif model_name == "vgg":
     # create a model by replacing the classifier of a VGG16 model with a new classifier specific
     # to the breast cancer problem
     # recommend fine-tuning last 4 layers
     #with tf.device("/cpu"):
-    model_base = VGG16(include_top=False, input_shape=input_shape, input_tensor=images)
+    model_base = tf.keras.applications.VGG16(
+        include_top=False, input_shape=input_shape, input_tensor=images)
     inputs = model_base.inputs
     x = model_base.output
-    x = Flatten()(x)
-    #x = GlobalAveragePooling2D()(x)
-    #x = Dropout(0.5)(x)
-    #x = Dropout(0.1)(x)
-    #x = Dense(256, activation='relu', name='fc1')(x)
-    #x = Dense(256, kernel_initializer="he_normal",
+    x = tf.keras.layers.Flatten()(x)
+    #x = tf.keras.layers.GlobalAveragePooling2D()(x)
+    #x = tf.keras.layers.Dropout(0.5)(x)
+    #x = tf.keras.layers.Dropout(0.1)(x)
+    #x = tf.keras.layers.Dense(256, activation='relu', name='fc1')(x)
+    #x = tf.keras.layers.Dense(256, kernel_initializer="he_normal",
     #    kernel_regularizer=keras.regularizers.l2(l2))(x)
-    #x = Dropout(0.5)(x)
-    #x = Dropout(0.1)(x)
-    #x = Dense(256, activation='relu', name='fc2')(x)
-    #x = Dense(256, kernel_initializer="he_normal",
+    #x = tf.keras.layers.Dropout(0.5)(x)
+    #x = tf.keras.layers.Dropout(0.1)(x)
+    #x = tf.keras.layers.Dense(256, activation='relu', name='fc2')(x)
+    #x = tf.keras.layers.Dense(256, kernel_initializer="he_normal",
     #    kernel_regularizer=keras.regularizers.l2(l2))(x)
-    # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
-    logits = Dense(1, kernel_initializer="glorot_normal")(x)
-    model_tower = Model(inputs=inputs, outputs=logits, name="model")
+    # init tf.keras.layers.Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
+    logits = tf.keras.layers.Dense(1, kernel_initializer="glorot_normal")(x)
+    model_tower = tf.keras.Model(inputs=inputs, outputs=logits, name="model")
 
   elif model_name == "vgg_new":
     # train a new vgg16-like model from scratch on inputs in [-1, 1].
     #with tf.device("/cpu"):
-    model_base = VGG16(
+    model_base = tf.keras.applications.VGG16(
         include_top=False, input_shape=input_shape, input_tensor=images, weights=None)
     inputs = model_base.inputs
     x = model_base.output
-    x = Flatten()(x)
-    #x = GlobalAveragePooling2D()(x)
-    #x = Dropout(0.5)(x)
-    #x = Dropout(0.1)(x)
-    #x = Dense(256, activation='relu', name='fc1')(x)
-    #x = Dense(256, kernel_initializer="he_normal",
-    #    kernel_regularizer=keras.regularizers.l2(l2))(x)
-    #x = Dropout(0.5)(x)
-    #x = Dropout(0.1)(x)
-    #x = Dense(256, activation='relu', name='fc2')(x)
-    #x = Dense(256, kernel_initializer="he_normal",
-    #    kernel_regularizer=keras.regularizers.l2(l2))(x)
-    # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
-    logits = Dense(1, kernel_initializer="glorot_normal")(x)
-    model_tower = Model(inputs=inputs, outputs=logits, name="model")
+    x = tf.keras.layers.Flatten()(x)
+    #x = tf.keras.layers.GlobalAveragePooling2D()(x)
+    #x = tf.keras.layers.Dropout(0.5)(x)
+    #x = tf.keras.layers.Dropout(0.1)(x)
+    #x = tf.keras.layers.Dense(256, activation='relu', name='fc1')(x)
+    #x = tf.keras.layers.Dense(256, kernel_initializer="he_normal",
+    #    kernel_regularizer=tf.keras.regularizers.l2(l2))(x)
+    #x = tf.keras.layers.Dropout(0.5)(x)
+    #x = tf.keras.layers.Dropout(0.1)(x)
+    #x = tf.keras.layers.Dense(256, activation='relu', name='fc2')(x)
+    #x = tf.keras.layers.Dense(256, kernel_initializer="he_normal",
+    #    kernel_regularizer=tf.keras.regularizers.l2(l2))(x)
+    # init tf.keras.layers.Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
+    logits = tf.keras.layers.Dense(1, kernel_initializer="glorot_normal")(x)
+    model_tower = tf.keras.Model(inputs=inputs, outputs=logits, name="model")
 
   elif model_name == "vgg19":
     # create a model by replacing the classifier of a VGG19 model with a new classifier specific
     # to the breast cancer problem
     # recommend fine-tuning last 4 layers
     #with tf.device("/cpu"):
-    #inputs = Input(shape=input_shape)
-    model_base = VGG19(include_top=False, input_shape=input_shape, input_tensor=images)  #inputs)
+    #inputs = tf.keras.layers.Input(shape=input_shape)
+    model_base = tf.keras.applications.VGG19(
+        include_top=False, input_shape=input_shape, input_tensor=images)
     inputs = model_base.inputs
     x = model_base.output
-    x = Flatten()(x)
-    # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
-    logits = Dense(1, kernel_initializer="glorot_normal")(x)
-    model_tower = Model(inputs=inputs, outputs=logits, name="model")
+    x = tf.keras.layers.Flatten()(x)
+    # init tf.keras.layers.Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
+    logits = tf.keras.layers.Dense(1, kernel_initializer="glorot_normal")(x)
+    model_tower = tf.keras.Model(inputs=inputs, outputs=logits, name="model")
 
   elif model_name == "resnet":
     # create a model by replacing the classifier of a ResNet50 model with a new classifier
@@ -505,14 +501,14 @@ def create_model(model_name, input_shape, images):
     # batch norm not being well defined for shared settings, but it makes it quite annoying in
     # this context.  to "fix" it, we define it by directly passing in the `images` tensor
     # https://github.com/fchollet/keras/issues/2827
-    model_base = ResNet50(include_top=False, input_shape=input_shape, input_tensor=images)
+    model_base = resnet50.ResNet50(include_top=False, input_shape=input_shape, input_tensor=images)
     inputs = model_base.inputs
     x = model_base.output
-    x = Flatten()(x)
-    #x = GlobalAveragePooling2D()(x)
-    # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
-    logits = Dense(1, kernel_initializer="glorot_normal")(x)
-    model_tower = Model(inputs=inputs, outputs=logits, name="model")
+    x = tf.keras.layers.Flatten()(x)
+    #x = tf.keras.layers.GlobalAveragePooling2D()(x)
+    # init tf.keras.layers.Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
+    logits = tf.keras.layers.Dense(1, kernel_initializer="glorot_normal")(x)
+    model_tower = tf.keras.Model(inputs=inputs, outputs=logits, name="model")
 
   elif model_name == "resnet_new":
     # train a new resnet50-like model from scratch on inputs in [-1, 1].
@@ -522,15 +518,15 @@ def create_model(model_name, input_shape, images):
     # batch norm not being well defined for shared settings, but it makes it quite annoying in
     # this context.  to "fix" it, we define it by directly passing in the `images` tensor
     # https://github.com/fchollet/keras/issues/2827
-    model_base = ResNet50(
+    model_base = resnet50.ResNet50(
         include_top=False, input_shape=input_shape, input_tensor=images, weights=None)
     inputs = model_base.inputs
     x = model_base.output
-    x = Flatten()(x)
-    #x = GlobalAveragePooling2D()(x)
-    # init Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
-    logits = Dense(1, kernel_initializer="glorot_normal")(x)
-    model_tower = Model(inputs=inputs, outputs=logits, name="model")
+    x = tf.keras.layers.Flatten()(x)
+    #x = tf.keras.layers.GlobalAveragePooling2D()(x)
+    # init tf.keras.layers.Dense weights with Gaussian scaled by sqrt(2/(fan_in+fan_out))
+    logits = tf.keras.layers.Dense(1, kernel_initializer="glorot_normal")(x)
+    model_tower = tf.keras.Model(inputs=inputs, outputs=logits, name="model")
 
   elif model_name == "resnet_custom":
     model_base = None
@@ -545,11 +541,11 @@ def create_model(model_name, input_shape, images):
   #outs = []
   #for i in range(num_gpus):
   #  with tf.device("/gpu:{}".format(i)):
-  #    x = Input(shape=input_shape)  # split of batch
+  #    x = tf.keras.layers.Input(shape=input_shape)  # split of batch
   #    out = resnet50(x)  # run split on shared model
   #    ins.append(x)
   #    outs.append(out)
-  #model = Model(inputs=ins, outputs=outs)  # multi-GPU, data-parallel model
+  #model = tf.keras.Model(inputs=ins, outputs=outs)  # multi-GPU, data-parallel model
   model = model_tower
 
   # unfreeze all model layers.
@@ -626,8 +622,8 @@ def multi_gpu_model(model, gpus):
         # Retrieve a slice of the input on the CPU
         for x in model.inputs:
           input_shape = tuple(x.get_shape().as_list())[1:]
-          slice_i = Lambda(get_slice, output_shape=input_shape,
-                           arguments={'i': i, 'parts': num_gpus})(x)
+          slice_i = tf.keras.layers.Lambda(
+              get_slice, output_shape=input_shape, arguments={'i': i, 'parts': num_gpus})(x)
           inputs.append(slice_i)
 
       with tf.device('/gpu:%d' % gpu_id):
@@ -645,8 +641,8 @@ def multi_gpu_model(model, gpus):
     with tf.device('/cpu:0'):
       merged = []
       for name, outputs in zip(model.output_names, all_outputs):
-        merged.append(concatenate(outputs, axis=0, name=name))
-      return Model(model.inputs, merged)
+        merged.append(tf.keras.layers.concatenate(outputs, axis=0, name=name))
+      return tf.keras.Model(model.inputs, merged)
 
 
 def compute_data_loss(labels, logits):
@@ -782,22 +778,23 @@ def initialize_variables(sess):
     sess: A TensorFlow Session.
   """
   # NOTE: Keras keeps track of the variables that are initialized, and any call to
-  # `K.get_session()`, which is even used internally, will include logic to initialize variables.
-  # There is a situation in which resuming from a previous checkpoint and then saving the model
-  # after the first epoch will result in part of the model being reinitialized.  The problem is
-  # that calling `K.get_session()` here is too soon to initialize any variables, the resume branch
-  # skips any variable initialization, and then the `model.save` code path ends up calling
-  # `K.get_session()`, thus causing part of the model to be reinitialized.  Specifically, the model
-  # base is fine because it is initialized when the pretrained weights are added in, but the new
-  # dense classifier will not be marked as initialized by Keras.  The non-resume branch will
-  # initialize any variables not initialized by Keras yet, and thus will avoid this issue.  It
-  # could be possible to use `K.manual_variable_initialization(True)` and then manually initialize
+  # `tf.keras.backend.get_session()`, which is even used internally, will include logic to
+  # initialize variables.  There is a situation in which resuming from a previous checkpoint and
+  # then saving the model after the first epoch will result in part of the model being
+  # reinitialized.  The problem is that calling `tf.keras.backend.get_session()` here is too soon
+  # to initialize any variables, the resume branch skips any variable initialization, and then the
+  # `model.save` code path ends up calling `tf.keras.backend.get_session()`, thus causing part of
+  # the model to be reinitialized.  Specifically, the model base is fine because it is initialized
+  # when the pretrained weights are added in, but the new dense classifier will not be marked as
+  # initialized by Keras.  The non-resume branch will initialize any variables not initialized by
+  # Keras yet, and thus will avoid this issue.  It could be possible to use
+  # `tf.keras.backend.manual_variable_initialization(True)` and then manually initialize
   # all variables, but this would cause any pretrained weights to be removed.  Instead, we should
-  # initialize all variables first with the equivalent of the logic in `K.get_session()`, and then
-  # call resume.
+  # initialize all variables first with the equivalent of the logic in
+  # `tf.keras.backend.get_session()`, and then call resume.
   # NOTE: the global variables initializer will erase the pretrained weights, so we instead only
   # initialize the other variables
-  # NOTE: reproduced from the old K._initialize_variables() function
+  # NOTE: reproduced from the old tf.keras.backend._initialize_variables() function
   # EDIT: this was updated in the master branch in commit
   # https://github.com/fchollet/keras/commit/9166733c3c144739868fe0c30d57b861b4947b44
   # TODO: given the change in master, reevaluate whether or not this is actually necessary anymore
@@ -888,10 +885,10 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
   np.random.seed(seed)
   tf.set_random_seed(seed)
 
-  # create session, force Keras to use it
+  # create session, force tf.Keras to use it
   config = tf.ConfigProto(allow_soft_placement=True)#, log_device_placement=True)
   sess = tf.Session(config=config)
-  K.set_session(sess)
+  tf.keras.backend.set_session(sess)
 
   # debugger
   #from tensorflow.python import debug as tf_debug
@@ -951,7 +948,7 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
       # use l2 reg during training, but not during validation.  Otherwise, more fine-tuning will
       # lead to an apparent lower validation loss, even though it may just be due to more layers
       # that can be adjusted in order to lower the regularization portion of the loss.
-      #loss = tf.cond(K.learning_phase(), lambda: data_loss + l2*reg_loss, lambda: data_loss)
+      #loss = tf.cond(tf.keras.backend.learning_phase(), lambda: data_loss + l2*reg_loss, lambda: data_loss)
 
   # optim
   # TODO: extract this into a function with tests
@@ -1073,7 +1070,7 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
     tf.summary.scalar("batch_size", actual_batch_size, collections=["minibatch", "minibatch_val"])
     tf.summary.scalar("num_preds", num_preds, collections=["minibatch", "minibatch_val"])
     tf.summary.scalar("percent_positive", percent_pos, collections=["minibatch"])
-    tf.summary.scalar("learning_phase", tf.to_int32(K.learning_phase()),
+    tf.summary.scalar("learning_phase", tf.to_int32(tf.keras.backend.learning_phase()),
         collections=["minibatch", "minibatch_val"])
 
   # TODO: gradient histograms
@@ -1090,7 +1087,7 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
     tf.summary.scalar("f1", f1, collections=["epoch"])
     tf.summary.scalar("f1_max", f1_max, collections=["epoch"])
     tf.summary.scalar("thresh_max", thresh_max, collections=["epoch"])
-    summary_lib.pr_curve_raw_data_op(
+    tb.summary.pr_curve_raw_data_op(
         name='pr_curve',
         true_positive_counts=pr.tp,
         false_positive_counts=pr.fp,
@@ -1132,13 +1129,14 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
           if log_interval > 0 and global_step % log_interval == 0:
             # train, update metrics, & log stuff
             _, _, loss_val, summary_str = sess.run([train_op, metric_update_ops, loss,
-                minibatch_summaries], feed_dict={K.learning_phase(): 1})
+                minibatch_summaries], feed_dict={tf.keras.backend.learning_phase(): 1})
             mean_loss_val, f1_val = sess.run([mean_loss, f1])
             train_writer.add_summary(summary_str, global_step)
             print("train", global_epoch, global_step, loss_val, mean_loss_val, f1_val)
           else:
             # train & update metrics
-            _, _ = sess.run([train_op, metric_update_ops], feed_dict={K.learning_phase(): 1})
+            _, _ = sess.run(
+                [train_op, metric_update_ops], feed_dict={tf.keras.backend.learning_phase(): 1})
         except tf.errors.OutOfRangeError:
           break
       # log average training metrics for epoch & reset
@@ -1161,13 +1159,14 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
         try:
           # evaluate & update metrics
           if log_interval > 0 and vi % log_interval == 0:
-            _, loss_val, summary_str = sess.run([metric_update_ops, loss, minibatch_val_summaries],
-                feed_dict={K.learning_phase(): 0})
+            _, loss_val, summary_str = sess.run(
+                [metric_update_ops, loss, minibatch_val_summaries],
+                feed_dict={tf.keras.backend.learning_phase(): 0})
             mean_loss_val, f1_val = sess.run([mean_loss, f1])
             print("val", global_epoch, vi, loss_val, mean_loss_val, f1_val)
             val_writer.add_summary(summary_str, vi)
           else:
-            _ = sess.run(metric_update_ops, feed_dict={K.learning_phase(): 0})
+            _ = sess.run(metric_update_ops, feed_dict={tf.keras.backend.learning_phase(): 0})
           vi += 1
         except tf.errors.OutOfRangeError:
           break
@@ -1306,8 +1305,8 @@ def main(argv=None):
                              "clf_epochs_{args.clf_epochs}_ft_epochs_{args.finetune_epochs}_"\
                              "clf_lr_{args.clf_lr}_ft_lr_{args.finetune_lr}_"\
                              "ft_mom_{args.finetune_momentum}_ft_layers_{args.finetune_layers}_"\
-                             "l2_{args.l2}_aug_{args.augment}_marg_{args.marginalize}_"\
-                             "over_{args.oversample}".format(args=args)
+                             "l2_{args.l2}_rb_{args.reg_biases}_aug_{args.augment}_"\
+                             "marg_{args.marginalize}_over_{args.oversample}".format(args=args)
     full_exp_name = args.exp_name + "_" + args.exp_name_suffix
     args.exp_full_path = os.path.join(args.exp_parent_path, full_exp_name)
 
@@ -1371,13 +1370,13 @@ if __name__ == "__main__":
 #def reset():
 #  """Ensure that the TensorFlow graph/session are clean."""
 #  tf.reset_default_graph()
-#  K.clear_session()
+#  tf.keras.backend.clear_session()
 #  yield  # run test
 
 def reset():
   """Ensure that the TensorFlow graph/session are clean."""
   tf.reset_default_graph()
-  K.clear_session()
+  tf.keras.backend.clear_session()
 
 
 # data
@@ -1394,7 +1393,7 @@ def test_get_image(tmpdir):
   Image.fromarray(x).save(filename)
 
   image_op = get_image(filename, 64)
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
   image = sess.run(image_op)
 
   assert image.shape == (64, 64, 3)
@@ -1412,7 +1411,7 @@ def test_get_label():
   reset()
   filename = "train/mitosis/1_03_05_713_348.jpg"
   label_op = get_label(filename)
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
   label = sess.run(label_op)
   assert label == 1
 
@@ -1420,7 +1419,7 @@ def test_get_label():
   reset()
   filename = "train/normal/1_03_05_713_348.jpg"
   label_op = get_label(filename)
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
   label = sess.run(label_op)
   assert label == 0
 
@@ -1429,7 +1428,7 @@ def test_get_label():
     reset()
     filename = "train/unknown/1_03_05_713_348.jpg"
     label_op = get_label(filename)
-    sess = K.get_session()
+    sess = tf.keras.backend.get_session()
     label = sess.run(label_op)
 
 
@@ -1448,7 +1447,7 @@ def test_preprocess(tmpdir):
   Image.fromarray(x).save(filename_orig)
 
   image_op, label_op, filename_op = preprocess(tf.constant(filename_orig), 64)
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
   image, label, filename = sess.run([image_op, label_op, filename_op])
 
   assert image.shape == (64, 64, 3)
@@ -1461,7 +1460,7 @@ def test_preprocess(tmpdir):
 
 def test_normalize_unnormalize():
   reset()
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
   input_shape = (64, 64, 3)
   x_np = np.random.rand(*input_shape).astype(np.float32)  # uniform sampling in [0, 1)
   x_batch_np = np.random.rand(2, *input_shape).astype(np.float32)  # uniform sampling in [0, 1)
@@ -1529,7 +1528,7 @@ def test_normalize_unnormalize():
 
   # image standardization preprocessing
   reset()
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
   model_name = "not_vgg"
   x_norm_correct_np = x_np * 2 - 1
   x_batch_norm_correct_np = x_batch_np * 2 - 1
@@ -1600,7 +1599,7 @@ def test_augment(tmpdir):
 
   image_op = get_image(filename, 64)
   aug_image_op = augment(image_op, patch_size)
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
   image, aug_image = sess.run([image_op, aug_image_op])
 
   assert aug_image.shape == (64, 64, 3)
@@ -1615,14 +1614,14 @@ def test_augment(tmpdir):
   image_op = get_image(filename, 64)
   aug_image_op1 = augment(image_op, patch_size, 1)
   aug_image_op2 = augment(image_op, patch_size, 2)
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
   aug_image1a, aug_image2a = sess.run([aug_image_op1, aug_image_op2])
 
   reset()
   image_op = get_image(filename, 64)
   aug_image_op1 = augment(image_op, patch_size, 1)
   aug_image_op2 = augment(image_op, patch_size, 2)
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
   aug_image1b, aug_image2b = sess.run([aug_image_op1, aug_image_op2])
 
   assert np.allclose(aug_image1a, aug_image1b)
@@ -1634,7 +1633,7 @@ def test_create_augmented_batch():
   import pytest
 
   reset()
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
 
   patch_size = 64
   image = np.random.rand(patch_size, patch_size, 3).astype(np.float32)
@@ -1680,41 +1679,41 @@ def test_create_augmented_batch():
 def test_marginalize():
   import pytest
   reset()
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
 
   shape = (32, 1)
   logits = np.random.randn(*shape)  # will be embedded directly in tf graph
   marg_logits = marginalize(logits)  # tf ops
 
-  # forgot K.learning_phase()
+  # forgot tf.keras.backend.learning_phase()
   # NOTE: this is no longer an error due to a Keras change that sets a default value of 0 for
-  # `K.learning_phase()`.
+  # `tf.keras.backend.learning_phase()`.
   #with pytest.raises(tf.errors.InvalidArgumentError):
   #  l = sess.run(marg_logits)
 
   # train time
-  l = sess.run(marg_logits, feed_dict={K.learning_phase(): 1})
+  l = sess.run(marg_logits, feed_dict={tf.keras.backend.learning_phase(): 1})
   assert l.shape == shape
   assert np.array_equal(l, logits)
 
   # test time
-  l = sess.run(marg_logits, feed_dict={K.learning_phase(): 0})
+  l = sess.run(marg_logits, feed_dict={tf.keras.backend.learning_phase(): 0})
   assert l.shape == (1, 1)
   assert np.allclose(l.squeeze(), np.mean(logits))
 
   # equal labels
   reset()
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
   labels = np.full(shape, 1)
   marg_labels = marginalize(labels)
 
   # train time
-  l = sess.run(marg_labels, feed_dict={K.learning_phase(): 1})
+  l = sess.run(marg_labels, feed_dict={tf.keras.backend.learning_phase(): 1})
   assert l.shape == shape
   assert np.array_equal(l, labels)
 
   # test time
-  l = sess.run(marg_labels, feed_dict={K.learning_phase(): 0})
+  l = sess.run(marg_labels, feed_dict={tf.keras.backend.learning_phase(): 0})
   assert l.shape == (1, 1)
   assert np.allclose(l.squeeze(), 1)
 
@@ -1728,16 +1727,16 @@ def test_compute_l2_reg_loss():
   # NOTE: the pretrained layers will be initialized by Keras on creation, while the new Dense
   # layer will remain uninitialized
   input_shape = (224,224,3)
-  inputs = Input(shape=input_shape)
-  x = keras.layers.Conv2D(1, 3)(inputs)
-  x = keras.layers.BatchNormalization()(x)
-  logits = Dense(1)(x)
-  model = Model(inputs=inputs, outputs=logits, name="model")
+  inputs = tf.keras.layers.Input(shape=input_shape)
+  x = tf.keras.layers.Conv2D(1, 3)(inputs)
+  x = tf.keras.layers.BatchNormalization()(x)
+  logits = tf.keras.layers.Dense(1)(x)
+  model = tf.keras.Model(inputs=inputs, outputs=logits, name="model")
 
   for l in model.layers:
     l.trainable = True
 
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
 
   # all layers
   l2_reg = compute_l2_reg_loss(model)
@@ -1799,33 +1798,33 @@ def test_create_model():
 
   # logreg
   reset()
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
   test("logreg", 0)
 
   # vgg
   reset()
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
   test("vgg", 19)
 
   # vgg19
   reset()
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
   test("vgg19", 22)
 
   # resnet
   reset()
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
   test("resnet", 174)
 
   # resnet custom
   reset()
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
   test("resnet_custom", 0)
 
 
 def test_compute_data_loss():
   reset()
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
 
   shape = (32, 1)
   logits = np.random.rand(*shape).astype(np.float32)
@@ -1849,7 +1848,7 @@ def test_resettable_metric():
   with tf.name_scope("something"):  # testing nested name/variable scopes
     mean_op, update_op, reset_op = create_resettable_metric(tf.metrics.mean, 'mean_loss', values=x)
 
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
   sess.run(tf.global_variables_initializer())
   sess.run(tf.local_variables_initializer())
 
@@ -1881,37 +1880,39 @@ def test_resettable_metric():
 
 
 def test_initialize_variables():
-  # NOTE: keep the `K.get_session()` call up here to ensure that the `initialize_variables` function
-  # is working properly.
+  # NOTE: keep the `tf.keras.backend.get_session()` call up here to ensure that the
+  # `initialize_variables` function is working properly.
   #tf.reset_default_graph()
-  ##K.manual_variable_initialization(True)
-  #K.clear_session()  # this is needed if we want to create sessions at the beginning
+  ##tf.keras.backend.manual_variable_initialization(True)
+  #tf.keras.backend.clear_session()  # this is needed if we want to create sessions at the beginning
   reset()
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
 
   # create model with a mix of pretrained and new weights
   # NOTE: the pretrained layers will be initialized by Keras on creation, while the new Dense
   # layer will remain uninitialized
   input_shape = (224,224,3)
-  inputs = Input(shape=input_shape)
-  model_base = VGG16(include_top=False, input_shape=input_shape, input_tensor=inputs)
+  inputs = tf.keras.layers.Input(shape=input_shape)
+  model_base = tf.keras.applications.VGG16(
+      include_top=False, input_shape=input_shape, input_tensor=inputs)
   x = model_base.output
-  x = GlobalAveragePooling2D()(x)
-  logits = Dense(1)(x)
-  model = Model(inputs=inputs, outputs=logits, name="model")
+  x = tf.keras.layers.GlobalAveragePooling2D()(x)
+  logits = tf.keras.layers.Dense(1)(x)
+  model = tf.keras.Model(inputs=inputs, outputs=logits, name="model")
 
   # check that pre-trained model is initialized
-  # NOTE: This occurs because using pretrained weights ends up calling `K.batch_set_value`, which
-  # creates assignment ops and calls `K.get_session()` to get the session and then run the
-  # assignment ops.  The `K.get_session()` call initializes the model variables to random values
-  # and sets the `_keras_initialized` attribute to True for each variable.  Then the assignment ops
-  # run and actually set the variables to the pretrained values.  Without pretrained weights, the
-  # `K.get_session()` function is not called upon model creation, and thus these variables will
-  # remain uninitialized.  Furthermore, if we set `K.manual_variable_initialization(True)`, the
-  # pretrained weights will be loaded, but there will be no indication that those variables were
-  # already initialized, and thus we will end up reinitializing them to random values.  This is all
-  # a byproduct of using Keras + TensorFlow in a hybrid setup, and we should look into making this
-  # less brittle.
+  # NOTE: This occurs because using pretrained weights ends up calling
+  # `tf.keras.backend.batch_set_value`, which creates assignment ops and calls
+  # `tf.keras.backend.get_session()` to get the session and then run the assignment ops.  The
+  # `tf.keras.backend.get_session()` call initializes the model variables to random values and sets
+  # the `_keras_initialized` attribute to True for each variable.  Then the assignment ops run and
+  # actually set the variables to the pretrained values.  Without pretrained weights, the
+  # `tf.keras.backend.get_session()` function is not called upon model creation, and thus these
+  # variables will remain uninitialized.  Furthermore, if we set
+  # `tf.keras.backend.manual_variable_initialization(True)`, the pretrained weights will be loaded,
+  # but there will be no indication that those variables were already initialized, and thus we will
+  # end up reinitializing them to random values.  This is all a byproduct of using
+  # Keras + TensorFlow in a hybrid setup, and we should look into making this less brittle.
   for v in model_base.weights:
     assert hasattr(v, '_keras_initialized') and v._keras_initialized  # check for initialization
     assert sess.run(tf.is_variable_initialized(v))  # check for initialization
@@ -1930,34 +1931,36 @@ def test_initialize_variables():
   # NOTE: this is important for a hybrid Keras & TensorFlow setup where Keras is being used for the
   # model creation part, and raw TensorFlow is being used for the rest.  if variables are not
   # initialized *and* marked with the special Keras attribute, then certain Keras functions will end
-  # up accidentally reinitializing variables when they use `K.get_session()` internally.  In a pure
-  # Keras setup, this would not happen since the model would be initialized at the proper times.  In
-  # a Keras & TensorFlow hybrid setup, this can cause issues.  By encapsulating this nonsense in a
-  # function, we can avoid these problems.
+  # up accidentally reinitializing variables when they use `tf.keras.backend.get_session()`
+  # internally.  In a pure Keras setup, this would not happen since the model would be initialized
+  # at the proper times.  In a Keras & TensorFlow hybrid setup, this can cause issues.  By
+  # encapsulating this nonsense in a function, we can avoid these problems.
   for v in tf.global_variables():
     assert hasattr(v, '_keras_initialized') and v._keras_initialized  # check for initialization
     assert sess.run(tf.is_variable_initialized(v))  # check for initialization
 
 
 def test_random_seed():
+  # NOTE: goal here is to prove that random seeds actually work across sessions
+  # NOTE: after the move from `keras` to `tf.keras`, only the tf seed matters, rather than the
+  # numpy one
   reset()
   input_shape = (64,64,3)
   seed = 42
 
-  # seed before Keras import
-  np.random.seed(seed)
-  from keras.layers import Dense
-  layer1 = Dense(32)
+  # seed
+  import tensorflow as tf
+  tf.set_random_seed(seed)
+  layer1 = tf.keras.layers.Dense(32)
   layer1.build(input_shape)
   w1 = layer1.get_weights()[0]
 
   reset()
-  np.random.seed(23)  # different random seed just to be sure...
 
-  # seed after Keras import
-  from keras.layers import Dense
-  np.random.seed(seed)
-  layer2 = Dense(32)
+  # seed after tf import
+  import tensorflow as tf
+  tf.set_random_seed(seed)
+  layer2 = tf.keras.layers.Dense(32)
   layer2.build(input_shape)
   w2 = layer2.get_weights()[0]
 
@@ -2081,10 +2084,10 @@ def test_dataset_reinit_iter_augment_seeds():
 def test_normalize_dtype():
   import pytest
   reset()
-  sess = K.get_session()
+  sess = tf.keras.backend.get_session()
 
   input_shape = (64,64,3)
-  model = VGG16(include_top=False, input_shape=input_shape)
+  model = tf.keras.applications.VGG16(include_top=False, input_shape=input_shape)
 
   # check on incorrect float type promotion within the normalize function
 
@@ -2163,11 +2166,11 @@ def test_model_updates():
   # NOTE: the pretrained layers will be initialized by Keras on creation, while the new Dense
   # layer will remain uninitialized
   input_shape = (224,224,3)
-  inputs = Input(shape=input_shape)
-  bn = keras.layers.BatchNormalization()
+  inputs = tf.keras.layers.Input(shape=input_shape)
+  bn = tf.keras.layers.BatchNormalization()
   x = bn(inputs)
-  logits = Dense(1)(x)
-  model = Model(inputs=inputs, outputs=logits, name="model")
+  logits = tf.keras.layers.Dense(1)(x)
+  model = tf.keras.Model(inputs=inputs, outputs=logits, name="model")
 
   # all trainable
   assert len(model.updates) > 0
