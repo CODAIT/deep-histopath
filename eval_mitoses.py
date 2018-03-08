@@ -2,15 +2,13 @@
 import argparse
 import os
 
-from keras.models import load_model
-import keras.backend as K
 import numpy as np
 import tensorflow as tf
 
 from train_mitoses import create_dataset, compute_data_loss, compute_metrics, marginalize
 
 
-def evaluate(patches_path, patch_size, batch_size, model, model_name, prob_threshold,
+def evaluate(patches_path, patch_size, batch_size, model_path, model_name, prob_threshold,
     marginalization, threads, prefetch_batches, log_interval):
   """Evaluate a model.
 
@@ -20,7 +18,7 @@ def evaluate(patches_path, patch_size, batch_size, model, model_name, prob_thres
     patch_size: Integer length to which the square patches will be
       resized.
     batch_size: Integer batch size.
-    model: A Keras Model object.
+    model_path: String path to a Keras Model object.
     model_name: String indicating the model to use.
     prob_threshold: Decimal threshold over which the patch is predicted as a
       positive case.
@@ -41,6 +39,11 @@ def evaluate(patches_path, patch_size, batch_size, model, model_name, prob_thres
     F1 score, ppv (precision), sensitivity (recall), accuracy, and loss
     values on the dataset.
   """
+  # create session, force tf.Keras to use it
+  config = tf.ConfigProto(allow_soft_placement=True)#, log_device_placement=True)
+  sess = tf.Session(config=config)
+  tf.keras.backend.set_session(sess)
+
   # data
   with tf.name_scope("data"):
     dataset = create_dataset(patches_path, model_name, patch_size, batch_size, False, False,
@@ -56,6 +59,9 @@ def evaluate(patches_path, patch_size, batch_size, model, model_name, prob_thres
 
   # models
   with tf.name_scope("model"):
+    # load model
+    model = tf.keras.models.load_model(model_path, compile=False)
+
     # compute logits and predictions, possibly with marginalization
     # NOTE: tf prefers to feed logits into a combined sigmoid and logistic loss function for
     # numerical stability
@@ -64,7 +70,6 @@ def evaluate(patches_path, patch_size, batch_size, model, model_name, prob_thres
     else:
       logits = model(images)
     probs = tf.nn.sigmoid(logits, name="probs")
-    #preds = tf.round(probs, name="preds")  # implicit threshold at 0.5
     preds = probs > prob_threshold
 
   # loss
@@ -82,7 +87,6 @@ def evaluate(patches_path, patch_size, batch_size, model, model_name, prob_thres
     thresh_max = pr.thresholds[tf.argmax(f1s)]
 
   # initialize stuff
-  sess = K.get_session()
   sess.run([data_init_op, metric_reset_ops])
 
   # evaluation
@@ -90,7 +94,7 @@ def evaluate(patches_path, patch_size, batch_size, model, model_name, prob_thres
   while True:
     try:
       # evaluate & update metrics
-      sess.run(metric_update_ops, feed_dict={K.learning_phase(): 0})
+      sess.run(metric_update_ops, feed_dict={tf.keras.backend.learning_phase(): 0})
 
       if log_interval > 0 and vi % log_interval == 0:
         metrics = sess.run([f1, ppv, sens, acc, mean_loss])
@@ -120,7 +124,8 @@ def main(args=None):
   """
   # parse args
   parser = argparse.ArgumentParser()
-  parser.add_argument("--model_name", required=True, choices=['logreg', 'vgg', 'vgg19', 'resnet'],
+  parser.add_argument("--model_name", required=True,
+      choices=['logreg', 'vgg', 'vgg_new', 'vgg19', 'resnet', 'resnet_new', 'resnet_custom'],
       help="name of the model, which is used for determining the correct normalization")
   parser.add_argument("--model_path", required=True,
       help="path to a Keras model to use for false-positive oversampling; note: this model should "\
@@ -146,9 +151,6 @@ def main(args=None):
 
   args = parser.parse_args(args)
 
-  # load model
-  model = load_model(args.model_path, compile=False)
-
   # sanity check to check for keras bug
   #from keras.layers import Input
   #from train_mitoses import create_model
@@ -158,9 +160,11 @@ def main(args=None):
   #model.load_weights(args.model_path)
 
   # eval!
-  evaluate(args.patches_path, args.patch_size, args.batch_size, model, args.model_name,
-      args.prob_threshold, args.marginalize, args.threads, args.prefetch_batches,
-      args.log_interval)
+  evaluate(
+      patches_path=args.patches_path, patch_size=args.patch_size, batch_size=args.batch_size,
+      model_path=args.model_path, model_name=args.model_name, prob_threshold=args.prob_threshold,
+      marginalization=args.marginalize, threads=args.threads,
+      prefetch_batches=args.prefetch_batches, log_interval=args.log_interval)
 
 
 if __name__ == "__main__":
