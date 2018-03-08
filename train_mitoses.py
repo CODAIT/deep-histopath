@@ -2181,3 +2181,59 @@ def test_model_updates():
   assert len(model.updates) == 0
   assert model.updates != bn._updates
 
+
+def test_batchnorm():
+  """Test whether or not the batch norm layer works correctly in a pure TF workflow."""
+  reset()
+
+  # create model with a mix of pretrained and new weights
+  # NOTE: the pretrained layers will be initialized by Keras on creation, while the new Dense
+  # layer will remain uninitialized
+  input_shape = (64,64,3)
+  inputs = tf.keras.layers.Input(shape=input_shape)
+  x = tf.keras.layers.Dense(1)(inputs)
+  bn = tf.keras.layers.BatchNormalization()
+  x = bn(x)
+  logits = tf.keras.layers.Dense(1)(x)
+  model = tf.keras.Model(inputs=inputs, outputs=logits, name="model")
+
+  # create session, force tf.Keras to use it
+  config = tf.ConfigProto(allow_soft_placement=True)#, log_device_placement=True)
+  sess = tf.Session(config=config)
+  tf.keras.backend.set_session(sess)
+
+  #sess.run(tf.global_variables_initializer())
+  initialize_variables(sess)
+
+  # moving mean & std dev before training
+  mu, std = sess.run([bn.moving_mean, bn.moving_variance])
+
+  x = np.random.randn(10, *input_shape)
+
+  # training mode (should use batch mean & std dev)
+  out1 = sess.run(model.output, feed_dict={model.input: x, tf.keras.backend.learning_phase(): 1})
+  out2 = sess.run(model.output, feed_dict={model.input: x, tf.keras.backend.learning_phase(): 1})
+  assert np.array_equal(out1, out2)
+
+  # non-training mode (should use internal moving average and std dev)
+  out3 = sess.run(model.output, feed_dict={model.input: x, tf.keras.backend.learning_phase(): 0})
+  out4 = sess.run(model.output, feed_dict={model.input: x, tf.keras.backend.learning_phase(): 0})
+  assert np.array_equal(out3, out4)
+  assert not np.allclose(out3, out1)
+
+  # training mode again
+  out5 = sess.run(model.output, feed_dict={model.input: x, tf.keras.backend.learning_phase(): 1})
+  assert np.array_equal(out5, out1)
+
+  # update ops (update internal moving average and std dev)
+  sess.run(model.updates, feed_dict={model.input: x, tf.keras.backend.learning_phase(): 1})
+
+  # train again (should not be affected by the updates)
+  out6 = sess.run(model.output, feed_dict={model.input: x, tf.keras.backend.learning_phase(): 1})
+  assert np.array_equal(out6, out1)
+
+  # non-train again (should use updated moving average and std dev)
+  out7 = sess.run(model.output, feed_dict={model.input: x, tf.keras.backend.learning_phase(): 0})
+  assert not np.array_equal(out7, out6)  # not equal to train
+  assert not np.array_equal(out7, out3)  # not equal to previous test due to update ops
+
