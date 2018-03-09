@@ -268,8 +268,8 @@ def marginalize(x):
   return x
 
 
-def process_dataset(dataset, model_name, patch_size, augmentation, marginalization, threads,
-    seed=None):
+def process_dataset(dataset, model_name, patch_size, augmentation, marginalization, marg_batch_size,
+    threads, seed=None):
   """Process a Dataset.
 
   Args:
@@ -285,8 +285,9 @@ def process_dataset(dataset, model_name, patch_size, augmentation, marginalizati
       augmented versions of that image, and predicted probabilities for
       each batch will be averaged to yield a single noise-marginalized
       prediction for each image.  Note: if this is True, then
-      `batch_size` must be divisible by 4, or equal to 1 for a special
+      `marg_batch_size` must be divisible by 4, or equal to 1 for a special
       debugging case of no augmentation.
+    marg_batch_size: Integer training batch size.
     threads: Integer number of threads for dataset buffering.
     seed: Integer random seed.
 
@@ -313,9 +314,9 @@ def process_dataset(dataset, model_name, patch_size, augmentation, marginalizati
   # marginalize (typically at eval time)
   if marginalization:
     dataset = dataset.map(lambda image, label, filename:
-        (create_augmented_batch(image, batch_size, patch_size),
-         tf.tile(tf.expand_dims(label, -1), [batch_size]),
-         tf.tile(tf.expand_dims(filename, -1), [batch_size])),
+        (create_augmented_batch(image, marg_batch_size, patch_size),
+         tf.tile(tf.expand_dims(label, -1), [marg_batch_size]),
+         tf.tile(tf.expand_dims(filename, -1), [marg_batch_size])),
         num_parallel_calls=threads)
 
   # normalize
@@ -369,9 +370,9 @@ def create_dataset(path, model_name, patch_size, batch_size, shuffle, augmentati
     normal_dataset = normal_dataset.shuffle(int(1e6))
 
     mitosis_dataset = process_dataset(mitosis_dataset, model_name, patch_size, augmentation, False,
-        threads, seed)
+        batch_size, threads, seed)
     normal_dataset = process_dataset(normal_dataset, model_name, patch_size, augmentation, False,
-        threads, seed)
+        batch_size, threads, seed)
 
     # zip together the datasets, then flatten and batch so that each mini-batch contains an even
     # number of mitosis and normal samples
@@ -382,6 +383,9 @@ def create_dataset(path, model_name, patch_size, batch_size, shuffle, augmentati
     dataset = dataset.flat_map(lambda mitosis, normal:
         tf.data.Dataset.from_tensors(mitosis).concatenate(tf.data.Dataset.from_tensors(normal)))
     dataset = dataset.batch(batch_size)
+    # note that batch norm could be affected by very small final batches, but right now this would
+    # also affect evaluation tasks, so we will wait to enable this until we move to tf Estimators
+    #dataset = dataset.apply(tf.contrib.data.batch_and_drop_remainder(batch_size))
 
   else:
     dataset = tf.data.Dataset.list_files(os.path.join(path, "*", "*.png"))
@@ -390,11 +394,14 @@ def create_dataset(path, model_name, patch_size, batch_size, shuffle, augmentati
       dataset = dataset.shuffle(int(1e7))
 
     dataset = process_dataset(dataset, model_name, patch_size, augmentation, marginalization,
-        threads, seed)
+        batch_size, threads, seed)
 
     # batch if necessary
     if not marginalization:
       dataset = dataset.batch(batch_size)
+      # note that batch norm could be affected by very small final batches, but right now this would
+      # also affect evaluation tasks, so we will wait to enable this until we move to tf Estimators
+      #dataset = dataset.apply(tf.contrib.data.batch_and_drop_remainder(batch_size))
 
   # prefetch
   dataset = dataset.prefetch(prefetch_batches)
@@ -656,6 +663,11 @@ def compute_data_loss(labels, logits):
   Returns:
     A scalar Tensor representing the mean logistic loss.
   """
+  # TODO: this is a binary classification problem so optimizing a loss derived from a Bernoulli
+  # distribution is appropriate.  however, would the dynamics of the training algorithm be more
+  # stable if we treated this as a multi-class classification problem and derived a loss from a
+  # Multinomial distribution with two classes (and a single trial)?  it would be
+  # over-parameterized, but then again, the deep net itself is already heavily parameterized.
   loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
     labels=tf.reshape(labels, [-1, 1]), logits=logits))
   return loss
@@ -902,8 +914,15 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
     val_dataset = create_dataset(val_path, model_name, patch_size, val_batch_size, False,
         False, marginalization, False, threads, prefetch_batches)  #, seed)
 
+    # note that batch norm could be affected by very small final batches, but right now the fix,
+    # which requires this change as well, would also affect evaluation tasks, so we will wait to
+    # enable that (and this change too) until we move to tf Estimators
+    #output_shapes = (tf.TensorShape([None, patch_size, patch_size, 3]),
+    #                 tf.TensorShape([None]),
+    #                 tf.TensorShape([None]))
     iterator = tf.data.Iterator.from_structure(train_dataset.output_types,
                                                train_dataset.output_shapes)
+                                               #output_shapes)
     train_init_op = iterator.make_initializer(train_dataset)
     val_init_op = iterator.make_initializer(val_dataset)
     images, labels, filenames = iterator.get_next()
