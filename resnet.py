@@ -31,19 +31,22 @@ def res_block(xin, dbottle, dout, k, stride):
   din = tf.shape(xin)[depth_axis]  # input depth
   he_init = tf.keras.initializers.VarianceScaling(scale=2.0, mode='fan_in', distribution='normal')
 
+  # TODO: ReLUs have been quite successful, but it still seems like it could be a problem due to
+  # gradient stopping at ReLU zero values.  Perhaps look into leaky ReLUs, ELUs, etc.
+
   # conv 1x1
-  x = tf.keras.layers.BatchNormalization(axis=depth_axis)(xin)
+  x = tf.keras.layers.BatchNormalization(axis=depth_axis, momentum=0.9, epsilon=1e-4)(xin)
   x = tf.keras.layers.Activation('relu')(x)
   x = tf.keras.layers.Conv2D(
       dbottle, (1, 1), strides=(stride, stride), kernel_initializer=he_init)(x)
 
   # conv 3x3
-  x = tf.keras.layers.BatchNormalization(axis=depth_axis)(x)
+  x = tf.keras.layers.BatchNormalization(axis=depth_axis, momentum=0.9, epsilon=1e-4)(x)
   x = tf.keras.layers.Activation('relu')(x)
   x = tf.keras.layers.Conv2D(dbottle, (k, k), padding='same', kernel_initializer=he_init)(x)
 
   # conv 1x1
-  x = tf.keras.layers.BatchNormalization(axis=depth_axis)(x)
+  x = tf.keras.layers.BatchNormalization(axis=depth_axis, momentum=0.9, epsilon=1e-4)(x)
   x = tf.keras.layers.Activation('relu')(x)
   x = tf.keras.layers.Conv2D(dout, (1, 1), kernel_initializer=he_init)(x)
 
@@ -129,16 +132,22 @@ def ResNet(xin, shape):  # camel case makes it feel like a class -- eventually w
 
   # final functions
   with tf.variable_scope("end"):
-    x = tf.keras.layers.BatchNormalization(axis=depth_axis)(x)  # shape (h/8,w/8,d[3])
+    x = tf.keras.layers.BatchNormalization(
+        axis=depth_axis, momentum=0.9, epsilon=1e-4)(x)  # shape (h/8,w/8,d[3])
     x = tf.keras.layers.Activation('relu')(x)  # shape (h/8,w/8,d[3])
     x = tf.keras.layers.AvgPool2D((8, 8))(x)  # shape (h/64,w/64,d[3])
     init = tf.keras.initializers.VarianceScaling(scale=1.0, mode='fan_in', distribution='normal')
+    # TODO: this is a binary classification problem so optimizing a loss derived from a Bernoulli
+    # distribution is appropriate.  however, would the dynamics of the training algorithm be more
+    # stable if we treated this as a multi-class classification problem and derived a loss from a
+    # Multinomial distribution with two classes (and a single trial)?  it would be
+    # over-parameterized, but then again, the deep net itself is already heavily parameterized.
     x = tf.keras.layers.Conv2D(
         1, (1, 1), kernel_initializer=init)(x)  # shape (h/64,w/64,1) <-- could use this for surgery
     x = tf.keras.layers.Flatten()(x)  # shape ((h/64)*(w/64)*1)  <-- normally will be a single value
 
   # create model (106 functions)
-  model = tf.keras.models.Model(xin, x, name='resnet')
+  model = tf.keras.Model(xin, x, name='resnet')
 
   return model
 
