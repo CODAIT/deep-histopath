@@ -701,7 +701,7 @@ def compute_l2_reg_loss(model, include_frozen=False, reg_final=True, reg_biases=
       if hasattr(layer, 'kernel'):  # conv, dense
         weights.append(layer.kernel)
       elif hasattr(layer, 'gamma'):  # batch norm scale
-        weights.append(layer.gamma)
+        weights.append(1.0 - layer.gamma)  # Gaussian prior centered at 1 for batch norm gamma value
       if reg_biases:
         # TODO: generally, we don't regularize the biases, but could we determine a probabilistic
         # motivation to do this?
