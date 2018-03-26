@@ -28,6 +28,8 @@ def main(args=None):
            "model will start with pretrained weights from imagenet. if this is set, the `models` "\
            "list must contain a single model that is compatible with these weights "\
            "(default: %(default)s)")
+  parser.add_argument("--patch_size", type=int, default=64,
+      help="integer length to which the square patches will be resized (default: %(default)s)")
   parser.add_argument("--train_batch_sizes", nargs='*', type=int, default=[32],
       help="list of training batch sizes (default: %(default)s)")
   parser.add_argument("--val_batch_size", type=int, default=32,
@@ -113,6 +115,8 @@ def main(args=None):
 
     if args.model_weights:
       train_args.append("--model_weights={args.model_weights}".format(args=args))
+
+    train_args.append("--patch_size={args.patch_size}".format(args=args))
 
     train_batch_size = random.choice(args.train_batch_sizes)
     train_args.append("--train_batch_size={train_batch_size}".format(train_batch_size=train_batch_size))
