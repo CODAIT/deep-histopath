@@ -27,7 +27,7 @@ from tensorflow.python.keras._impl.keras.layers import GlobalMaxPooling2D
 from tensorflow.python.keras._impl.keras.layers import BatchNormalization
 from tensorflow.python.keras._impl.keras.models import Model
 from tensorflow.python.keras._impl.keras import backend as K
-from tensorflow.python.keras._impl.keras.engine.topology import get_source_inputs
+from tensorflow.python.keras._impl.keras.engine.network import get_source_inputs
 from tensorflow.python.keras._impl.keras.utils import layer_utils
 from tensorflow.python.keras._impl.keras.utils.data_utils import get_file
 from tensorflow.python.keras._impl.keras.applications.imagenet_utils import decode_predictions
