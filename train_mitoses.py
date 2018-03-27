@@ -172,6 +172,20 @@ def augment(image, patch_size, seed=None):
   #new_size = tf.random_uniform([2], minval=lb, maxval=ub, dtype=tf.int32, seed=seed)
   #image = tf.image.resize_images(image, new_size)  # random resize
   #image = tf.random_crop(image, shape, seed=seed)  # random cropping back to original size
+  # mirror padding if needed
+  size = int(math.ceil((patch_size + 30) * (math.cos(math.pi/4) + math.sin(math.pi/4))))
+  #pad_h = tf.maximum(0, size - shape[0])
+  #pad_w = tf.maximum(0, size - shape[1])
+  #pad_h_before = tf.to_int32(tf.floor(pad_h / 2))
+  #pad_w_before = tf.to_int32(tf.floor(pad_w / 2))
+  #pad_h_after = pad_h - pad_h_before
+  #pad_w_after = pad_w - pad_w_before
+  #paddings = tf.reshape(
+  #    tf.stack([pad_h_before, pad_h_after, pad_w_before, pad_w_after, 0, 0], 0),
+  #    [3, 2])  # h, w, z before/after paddings
+  pad = tf.to_int32(tf.ceil(tf.maximum(0, size - shape[0]) / 2))
+  paddings = tf.reshape(tf.stack([pad, pad, pad, pad, 0, 0], 0), [3, 2])  # h, w, z before/after
+  image = tf.pad(image, paddings, mode="REFLECT")
   # random rotation
   angle = tf.random_uniform([], minval=0, maxval=2*np.pi, seed=seed)
   image = tf.contrib.image.rotate(image, angle, "BILINEAR")
