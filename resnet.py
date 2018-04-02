@@ -135,10 +135,16 @@ def ResNet(xin, shape):  # camel case makes it feel like a class -- eventually w
     x = tf.keras.layers.BatchNormalization(
         axis=depth_axis, momentum=0.9, epsilon=1e-4)(x)  # shape (h/8,w/8,d[3])
     x = tf.keras.layers.Activation('relu')(x)  # shape (h/8,w/8,d[3])
-    #x = tf.keras.layers.AvgPool2D((8, 8))(x)  # shape (h/64,w/64,d[3])
-    #x = tf.keras.layers.AvgPool2D((16, 16))(x)  # shape (h/128,w/128,d[3])  NOTE: assumes 128x128
-    x = tf.keras.layers.AvgPool2D((12, 12))(x)  # shape (h/100,w/100,d[3])  NOTE: assumes 100x100
-    #x = tf.keras.layers.GlobalAvgPool2D()(x)  # shape (h/64,w/64,d[3])
+    if shape[1] == 64:
+      x = tf.keras.layers.AvgPool2D((8, 8))(x)  # shape (h/64,w/64,d[3])
+    elif shape[1] == 128:
+      x = tf.keras.layers.AvgPool2D((16, 16))(x)  # shape (h/128,w/128,d[3])  NOTE: assumes 128x128
+    elif shape[1] == 100:
+      x = tf.keras.layers.AvgPool2D((12, 12))(x)  # shape (h/100,w/100,d[3])  NOTE: assumes 100x100
+    else:
+      # Note for potential surgery reasons, we won't use global pooling
+      #x = tf.keras.layers.GlobalAvgPool2D()(x)  # shape (h/64,w/64,d[3])
+      raise Exception("patch size unsupported")
     init = tf.keras.initializers.VarianceScaling(scale=1.0, mode='fan_in', distribution='normal')
     # TODO: this is a binary classification problem so optimizing a loss derived from a Bernoulli
     # distribution is appropriate.  however, would the dynamics of the training algorithm be more
