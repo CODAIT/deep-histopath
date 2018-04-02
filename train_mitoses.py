@@ -1098,12 +1098,12 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
 
   for layer in model_tower.layers:
     for weight in layer.weights:
-      tf.summary.histogram(weight.name, weight, collections=["minibatch"])
+      tf.summary.histogram(weight.name, weight, collections=["minibatch", "minibatch_val"])
     if hasattr(layer, 'output'):
       layer_name = "model/{}/out".format(layer.name)
-      tf.summary.histogram(layer_name, layer.output, collections=["minibatch"])
-  tf.summary.histogram("model/probs", probs, collections=["minibatch"])
-  tf.summary.histogram("model/preds", preds, collections=["minibatch"])
+      tf.summary.histogram(layer_name, layer.output, collections=["minibatch", "minibatch_val"])
+  tf.summary.histogram("model/probs", probs, collections=["minibatch", "minibatch_val"])
+  tf.summary.histogram("model/preds", preds, collections=["minibatch", "minibatch_val"])
 
   with tf.name_scope("minibatch"):
     tf.summary.scalar("loss", loss, collections=["minibatch"])
