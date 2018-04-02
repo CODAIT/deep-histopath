@@ -970,7 +970,7 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
     # numerical stability
     if marginalization:
       logits = marginalize(model.output)  # will marginalize at test time
-      labels = tf.cond(tf.keras.backend.learning_phase(), lambda: labels, lambda: labels[0])
+      labels = tf.cond(tf.keras.backend.learning_phase(), lambda: labels, lambda: labels[0:1])
     else:
       logits = model.output
     # for Bernoulli-derived loss

@@ -54,9 +54,6 @@ def evaluate(patches_path, patch_size, batch_size, model_path, model_name, prob_
     images, labels, filenames = iterator.get_next()
     input_shape = (patch_size, patch_size, 3)
 
-    if marginalization:
-      labels = marginalize(labels)  # will marginalize at test time
-
   # models
   with tf.name_scope("model"):
     # load model
@@ -67,6 +64,7 @@ def evaluate(patches_path, patch_size, batch_size, model_path, model_name, prob_
     # numerical stability
     if marginalization:
       logits = marginalize(model(images))  # will marginalize at test time
+      labels = labels[0:1]
     else:
       logits = model(images)
     probs = tf.nn.sigmoid(logits, name="probs")
