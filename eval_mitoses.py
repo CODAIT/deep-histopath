@@ -142,6 +142,8 @@ def main(args=None):
            "(default: %(default)s)")
   parser.add_argument("--threads", type=int, default=5,
       help="number of threads for dataset buffering (default: %(default)s)")
+  # TODO: update this to default to `None` to take advantage of auto prefetch buffer size tuning
+  # https://github.com/tensorflow/tensorflow/commit/d355f4e2644b68ea643f573c564936ec23b93787
   parser.add_argument("--prefetch_batches", type=int, default=100,
       help="number of batches to prefetch (default: %(default)s)")
   parser.add_argument("--log_interval", type=int, default=100,
