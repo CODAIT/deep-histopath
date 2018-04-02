@@ -2,6 +2,7 @@
 import argparse
 from datetime import datetime
 import json
+import math
 import os
 import pickle
 import shutil
@@ -59,8 +60,8 @@ def get_label(filename):
   is_valid = tf.logical_or(tf.equal(label_str, 'normal'), tf.equal(label_str, 'mitosis'))
   assert_op = tf.Assert(is_valid, [label_str])
   with tf.control_dependencies([assert_op]):  # test for correct label extraction
-    #label = tf.to_int32(tf.equal(label_str, 'mitosis'))
-    label = tf.to_float(tf.equal(label_str, 'mitosis'))  # required because model produces float
+    label = tf.to_int32(tf.equal(label_str, 'mitosis'))
+    #label = tf.to_float(tf.equal(label_str, 'mitosis'))  # required because model produces float
     return label
 
 
@@ -682,8 +683,11 @@ def compute_data_loss(labels, logits):
   # stable if we treated this as a multi-class classification problem and derived a loss from a
   # Multinomial distribution with two classes (and a single trial)?  it would be
   # over-parameterized, but then again, the deep net itself is already heavily parameterized.
-  loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
-    labels=tf.reshape(labels, [-1, 1]), logits=logits))
+  #loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
+  #  labels=tf.reshape(labels, [-1, 1]), logits=logits))
+  labels = tf.one_hot(indices=labels, depth=2, on_value=1, off_value=0)
+  loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(labels=labels, logits=logits))
+  #loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, features=logits))
   return loss
 
 
@@ -758,18 +762,19 @@ def compute_metrics(loss, labels, preds, probs, num_thresholds):
   sens, sens_update_op, sens_reset_op = create_resettable_metric(tf.metrics.recall,
       'sens', labels=labels, predictions=preds)
   f1 = 2 * (ppv * sens) / (ppv + sens)
-  pr, pr_update_op, pr_reset_op = create_resettable_metric(
-      tf.contrib.metrics.precision_recall_at_equal_thresholds,
-      'pr', labels=tf.cast(labels, dtype=tf.bool), predictions=probs, num_thresholds=num_thresholds)
-  f1s = 2 * (pr.precision * pr.recall) / (pr.precision + pr.recall)
+  #pr, pr_update_op, pr_reset_op = create_resettable_metric(
+  #    tf.contrib.metrics.precision_recall_at_equal_thresholds,
+  #    'pr', labels=tf.cast(labels, dtype=tf.bool), predictions=probs, num_thresholds=num_thresholds)
+  #f1s = 2 * (pr.precision * pr.recall) / (pr.precision + pr.recall)
 
   # combine all reset & update ops
   metric_update_ops = tf.group(mean_loss_update_op, acc_update_op, ppv_update_op, sens_update_op,
-      pr_update_op)
+    )#   pr_update_op)
   metric_reset_ops = tf.group(mean_loss_reset_op, acc_reset_op, ppv_reset_op, sens_reset_op,
-      pr_reset_op)
+    )#  pr_reset_op)
 
-  return mean_loss, acc, ppv, sens, f1, pr, f1s, metric_update_ops, metric_reset_ops
+  #return mean_loss, acc, ppv, sens, f1, pr, f1s, metric_update_ops, metric_reset_ops
+  return mean_loss, acc, ppv, sens, f1, metric_update_ops, metric_reset_ops
 
 
 # utils
@@ -942,9 +947,6 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
     images, labels, filenames = iterator.get_next()
     input_shape = (patch_size, patch_size, 3)
 
-    if marginalization:
-      labels = marginalize(labels)  # will marginalize at test time
-
   # models
   with tf.name_scope("model"):
     # replicate model on each GPU to allow for data parallelism
@@ -965,10 +967,13 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
     # numerical stability
     if marginalization:
       logits = marginalize(model.output)  # will marginalize at test time
+      labels = tf.cond(tf.keras.backend.learning_phase(), lambda: labels, lambda: labels[0])
     else:
       logits = model.output
-    probs = tf.nn.sigmoid(logits, name="probs")
-    preds = tf.round(probs, name="preds")  # implicit threshold at 0.5
+    #probs = tf.nn.sigmoid(logits, name="probs")
+    #preds = tf.round(probs, name="preds")  # implicit threshold at 0.5
+    probs = tf.nn.softmax(logits, name="probs")  # possible improved numerical stability
+    preds = tf.argmax(probs, axis=1, name="preds")
 
   # loss
   with tf.name_scope("loss"):
@@ -1039,10 +1044,11 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
   # metrics
   with tf.name_scope("metrics"):
     num_thresholds = 11
-    mean_loss, acc, ppv, sens, f1, pr, f1s, metric_update_ops, metric_reset_ops = compute_metrics(
+    #mean_loss, acc, ppv, sens, f1, pr, f1s, metric_update_ops, metric_reset_ops = compute_metrics(
+    mean_loss, acc, ppv, sens, f1, metric_update_ops, metric_reset_ops = compute_metrics(
       loss, labels, preds, probs, num_thresholds)
-    f1_max = tf.reduce_max(f1s)
-    thresh_max = pr.thresholds[tf.argmax(f1s)]
+    f1_max = tf.constant(1.0) #tf.reduce_max(f1s)
+    thresh_max = tf.constant(1.0) #pr.thresholds[tf.argmax(f1s)]
 
   # tensorboard summaries
   # TODO: extract this into a function
@@ -1063,7 +1069,8 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
     num_preds = tf.shape(preds)[0]
 
     # false-positive & false-negative cases
-    pos_preds_mask = tf.cast(tf.squeeze(preds, axis=1), tf.bool)
+    #pos_preds_mask = tf.cast(tf.squeeze(preds, axis=1), tf.bool)
+    pos_preds_mask = tf.cast(preds, tf.bool)
     neg_preds_mask = tf.logical_not(pos_preds_mask)
     fp_mask = tf.logical_and(pos_preds_mask, neg_mask)
     fn_mask = tf.logical_and(neg_preds_mask, pos_mask)
@@ -1120,18 +1127,18 @@ def train(train_path, val_path, exp_path, model_name, model_weights, patch_size,
     tf.summary.scalar("f1", f1, collections=["epoch"])
     tf.summary.scalar("f1_max", f1_max, collections=["epoch"])
     tf.summary.scalar("thresh_max", thresh_max, collections=["epoch"])
-    tb.summary.pr_curve_raw_data_op(
-        name='pr_curve',
-        true_positive_counts=pr.tp,
-        false_positive_counts=pr.fp,
-        true_negative_counts=pr.tn,
-        false_negative_counts=pr.fn,
-        precision=pr.precision,
-        recall=pr.recall,
-        num_thresholds=num_thresholds,
-        display_name='pr curve',
-        description="PR curve for {num_thresholds} thresholds.".format(num_thresholds=num_thresholds),
-        collections=["epoch"])
+    #tb.summary.pr_curve_raw_data_op(
+    #    name='pr_curve',
+    #    true_positive_counts=pr.tp,
+    #    false_positive_counts=pr.fp,
+    #    true_negative_counts=pr.tn,
+    #    false_negative_counts=pr.fn,
+    #    precision=pr.precision,
+    #    recall=pr.recall,
+    #    num_thresholds=num_thresholds,
+    #    display_name='pr curve',
+    #    description="PR curve for {num_thresholds} thresholds.".format(num_thresholds=num_thresholds),
+    #    collections=["epoch"])
   epoch_summaries = tf.summary.merge_all("epoch")
 
   # use train and val writers so that plots can be on same graph

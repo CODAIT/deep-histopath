@@ -146,8 +146,9 @@ def ResNet(xin, shape):  # camel case makes it feel like a class -- eventually w
     # Multinomial distribution with two classes (and a single trial)?  it would be
     # over-parameterized, but then again, the deep net itself is already heavily parameterized.
     x = tf.keras.layers.Conv2D(
-        1, (1, 1), kernel_initializer=init)(x)  # shape (h/64,w/64,1) <-- could use this for surgery
-    x = tf.keras.layers.Flatten()(x)  # shape ((h/64)*(w/64)*1)  <-- normally will be a single value
+        #1, (1, 1), kernel_initializer=init)(x)  # shape (h/64,w/64,1) <-- could use this for surgery
+        2, (1, 1), kernel_initializer=init)(x)  # shape (h/64,w/64,1) <-- could use this for surgery
+    x = tf.keras.layers.Flatten()(x)  # shape ((h/64)*(w/64)*2)  <-- normally will be a single value
 
   # create model (106 functions)
   model = tf.keras.Model(xin, x, name='resnet')
