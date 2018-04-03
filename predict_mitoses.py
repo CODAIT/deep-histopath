@@ -4,6 +4,7 @@ This script predict the number of mitoses for the input slide images
 import os
 import argparse
 import shutil
+
 from pyspark.sql import SparkSession
 from deephistopath.inference import predict_mitoses
 
@@ -108,6 +109,7 @@ def main(args=None):
   sparkContext.addPyFile("train_mitoses.py")
   sparkContext.addPyFile("preprocess_mitoses.py")
   sparkContext.addPyFile("resnet50.py")
+  sparkContext.addPyFile("resnet.py")
   predict_result_rdd = predict_mitoses(sparkContext=sparkContext, model_path=args.model_path,
                                        model_name=args.model_name,
                                        input_dir=args.slide_path, file_suffix=args.file_suffix,

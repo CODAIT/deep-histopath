@@ -431,21 +431,23 @@ def test_compute_f1():
   threshold = 30
 
   # test case 1: the prediction result is the same with the ground truth
-  predict1 = [(10, 10), (20, 30), (30, 60), (100, 53), (32, 26), (120, 66)]
+  predict1 = [(10, 10, 0.5), (20, 30, 0.5), (30, 60, 0.5), (100, 53, 0.5), (32, 26, 0.5),
+      (120, 66, 0.5)]
   ground_true1 = [(10, 10), (20, 30), (30, 60), (100, 53), (32, 26), (120, 66)]
   FP, TP, FN = prepare_f1_inputs(predict1, ground_true1, threshold)
   f1, precision, recall = compute_f1(FP, TP, FN)
   assert f1 == 1
 
   # test case 2: the prediction result is totally different from the ground truth
-  predict2 = [(10, 10), (2, 3), (3, 6), (10, 5), (3, 2), (12, 6)]
+  predict2 = [(10, 10, 0.5), (2, 3, 0.5), (3, 6, 0.5), (10, 5, 0.5), (3, 2, 0.5), (12, 6, 0.5)]
   ground_true2 = [(100, 100), (200, 300), (300, 600), (1000, 530), (320, 260), (1200, 660)]
   FP, TP, FN = prepare_f1_inputs(predict2, ground_true2, threshold)
   f1, precision, recall = compute_f1(FP, TP, FN)
   assert f1 == 0
 
   # test case 3: the prediction result partially matches the ground truth
-  predict3 = [(2, 3), (50, 180), (66, 20), (80, 70), (100, 200), (300, 400)]
+  predict3 = [(2, 3, 0.5), (50, 180, 0.5), (66, 20, 0.5), (80, 70, 0.5), (100, 200, 0.5),
+      (300, 400, 0.5)]
   ground_true3 = [(10, 10), (40, 50), (50, 200), (60, 110), (70, 10), (80, 80)]
   FP, TP, FN = prepare_f1_inputs(predict3, ground_true3, threshold)
   f1, precision, recall = compute_f1(FP, TP, FN)
@@ -459,7 +461,8 @@ def test_compute_f1():
   assert f1 == 0
 
   # test case 5: prediction but not ground truth
-  predict5 = [(2, 3), (50, 180), (66, 20), (80, 70), (100, 200), (300, 400)]
+  predict5 = [(2, 3, 0.5), (50, 180, 0.5), (66, 20, 0.5), (80, 70, 0.5), (100, 200, 0.5),
+      (300, 400, 0.5)]
   ground_true5 = []
   FP, TP, FN = prepare_f1_inputs(predict5, ground_true5, threshold)
   f1, precision, recall = compute_f1(FP, TP, FN)
@@ -648,12 +651,13 @@ def test_evaluate_global_f1():
 
   threshold = 30
   # implicit 0.5 threshold
-  f1_list, over_detected, non_detected, FP, TP, FN \
-    = evaluate_global_f1(pred_dir, ground_true_dir, threshold)
-  assert np.allclose(f1_list, 0.518918918918919)
+  f1, ppv, sens, over_detected, non_detected, fp_list, tp_list, fn_list = evaluate_global_f1(
+      pred_dir, ground_true_dir, threshold)
+  assert np.allclose(f1, 0.518918918918919)
 
   # custom threshold
   prob_threshold = 0.6
-  f1_list, over_detected, non_detected, FP, TP, FN \
-    = evaluate_global_f1(pred_dir, ground_true_dir, threshold, prob_threshold)
-  assert np.allclose(f1_list, 0.5445544554455445)
+  f1, ppv, sens, over_detected, non_detected, fp_list, tp_list, fn_list = evaluate_global_f1(
+      pred_dir, ground_true_dir, threshold, prob_threshold)
+  assert np.allclose(f1, 0.5445544554455445)
+

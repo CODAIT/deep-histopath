@@ -4,18 +4,19 @@ This script predict the number of mitoses for the input slide images
 import os
 import socket
 from collections import Counter
-import numpy as np
 from time import gmtime, strftime
 
-from pathlib import Path
+import numpy as np
 import openslide
+import pandas as pd
+from pathlib import Path
+from PIL import Image
+import tensorflow as tf
 
 from deephistopath.preprocessing import create_tile_generator, get_20x_zoom_level
 from deephistopath.visualization import add_mark, Shape
-
-from PIL import Image
-
-import pandas as pd
+from preprocess_mitoses import create_mask, gen_dense_coords, extract_patch, gen_patches
+from train_mitoses import create_augmented_batch, marginalize, normalize
 
 MASK_FILE_PREFIX = "result/prediction/mitosis_location_img/"
 LOCATION_FILE_PREFIX = "result/prediction/mitosis_location_csv/"
@@ -173,12 +174,6 @@ def predict_mitoses_num_locations(model, model_name, threshold, ROI, tile_size=6
      the prediction result for the input ROI, (mitosis_num,
      mitosis_location_scores).
   """
-  # lazy importing to avoid eager gpu utilization
-  from preprocess_mitoses import gen_dense_coords, extract_patch, gen_patches
-  from train_mitoses import create_augmented_batch, marginalize, normalize
-  import keras.backend as K
-  import tensorflow as tf
-
   ROI_height, ROI_width, ROI_channel = ROI.shape
 
   # gen_dense_coords function will handle the cases that the tile center point is outside of the ROI
@@ -204,11 +199,11 @@ def predict_mitoses_num_locations(model, model_name, threshold, ROI, tile_size=6
     pred = marginalize(aug_preds)  # average predictions
 
     # make predictions
-    sess = K.get_session()
+    sess = tf.keras.backend.get_session()
     for tile in tiles:
       prep_tile_np = (tile / 255).astype(np.float32)  # convert to values in [0,1]
       pred_np, aug_preds_np = sess.run((pred, aug_preds),
-          feed_dict={prep_tile: prep_tile_np, K.learning_phase(): 0})
+          feed_dict={prep_tile: prep_tile_np, tf.keras.backend.learning_phase(): 0})
       predictions = np.concatenate((predictions, pred_np), axis=0)
 
       print (f"The {predictions.shape[0]}th prediction: max: {np.max(aug_preds_np)}, min: "\
@@ -289,17 +284,17 @@ def predict_mitoses_help(model_file, model_name, index, file_partition,
     if isDebug:
       print(f"GPU_ID: {gpu_id}")
 
-  import keras
-  from keras.models import load_model
-  from preprocess_mitoses import create_mask
+  config = tf.ConfigProto(allow_soft_placement=True)#, log_device_placement=True)
+  sess = tf.Session(config=config)
+  tf.keras.backend.set_session(sess)
 
   # load the model and add the sigmoid layer
-  base_model = load_model(model_file, compile=False)
+  base_model = tf.keras.models.load_model(model_file, compile=False)
 
   # specify the name of the added activation layer to avoid the name
   # conflict in ResNet
-  probs = keras.layers.Activation('sigmoid', name="sigmoid")(base_model.output)
-  model = keras.models.Model(inputs=base_model.input, outputs=probs)
+  probs = tf.keras.layers.Activation('sigmoid', name="sigmoid")(base_model.output)
+  model = tf.keras.models.Model(inputs=base_model.input, outputs=probs)
 
   result = []
 
@@ -610,11 +605,6 @@ def predict_mitoses_cpu(sparkContext, model_path, model_name, input_dir, file_su
   return predictions_rdd
 
 def test_predict_mitoses_num_locations():
-  import keras
-  from keras.models import load_model
-  from PIL import Image
-  from train_mitoses import normalize
-
   #TODO: change the model file path
   model_file = 'model/0.74172_f1_1.7319_loss_8_epoch_model.hdf5'
   model_name = 'vgg'
@@ -627,9 +617,9 @@ def test_predict_mitoses_num_locations():
   ROI = np.asarray(Image.open("data/test/1_11_01_1292_413_0_0_0.png"), dtype=np.int)
 
   # the expected probability
-  base_model = load_model(model_file  , compile=False)
-  probs = keras.layers.Activation('sigmoid', name="sigmoid")(base_model.output)
-  model = keras.models.Model(inputs=base_model.input, outputs=probs)
+  base_model = tf.keras.models.load_model(model_file  , compile=False)
+  probs = tf.keras.layers.Activation('sigmoid', name="sigmoid")(base_model.output)
+  model = tf.keras.models.Model(inputs=base_model.input, outputs=probs)
   norm_ROI = normalize((ROI / 255).astype(dtype=np.float32), model_name)
   prob = model.predict(np.expand_dims(norm_ROI, axis=0))
   print(f"The expected probability: {prob}")

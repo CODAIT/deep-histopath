@@ -7,10 +7,10 @@ import os
 import shutil
 import sys
 
-from keras.models import load_model
 import numpy as np
 from PIL import Image
 from sklearn.model_selection import train_test_split
+import tensorflow as tf
 
 from train_mitoses import normalize
 #from deephistopath.inference import gen_batches
@@ -704,7 +704,7 @@ if __name__ == "__main__":
 
   # load model for false-positive oversampling
   if args.model_path is not None:
-    model = load_model(args.model_path, compile=False)
+    model = tf.keras.models.load_model(args.model_path, compile=False)
   else:
     model = None
 
