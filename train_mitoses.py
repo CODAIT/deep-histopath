@@ -1788,7 +1788,7 @@ def test_compute_l2_reg_loss():
   l2_reg = compute_l2_reg_loss(model)
   correct_l2_reg = (
       tf.nn.l2_loss(model.layers[1].kernel)
-      + tf.nn.l2_loss(model.layers[2].gamma)
+      + tf.nn.l2_loss(1.0 - model.layers[2].gamma)
       + tf.nn.l2_loss(model.layers[3].kernel))
   l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
   assert np.array_equal(l2_reg_val, correct_l2_reg_val)
@@ -1796,7 +1796,9 @@ def test_compute_l2_reg_loss():
   # subset of layers
   model.layers[1].trainable = False
   l2_reg = compute_l2_reg_loss(model)
-  correct_l2_reg = tf.nn.l2_loss(model.layers[2].gamma) + tf.nn.l2_loss(model.layers[3].kernel)
+  correct_l2_reg = (
+      tf.nn.l2_loss(1.0 - model.layers[2].gamma)
+      + tf.nn.l2_loss(model.layers[3].kernel))
   l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
   assert np.array_equal(l2_reg_val, correct_l2_reg_val)
 
@@ -1805,7 +1807,7 @@ def test_compute_l2_reg_loss():
   l2_reg = compute_l2_reg_loss(model, True)
   correct_l2_reg = (
       tf.nn.l2_loss(model.layers[1].kernel)
-      + tf.nn.l2_loss(model.layers[2].gamma)
+      + tf.nn.l2_loss(1.0 - model.layers[2].gamma)
       + tf.nn.l2_loss(model.layers[3].kernel))
   l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
   assert np.array_equal(l2_reg_val, correct_l2_reg_val)
@@ -1813,7 +1815,9 @@ def test_compute_l2_reg_loss():
 
   # skip final layer
   l2_reg = compute_l2_reg_loss(model, reg_final=False)
-  correct_l2_reg = tf.nn.l2_loss(model.layers[1].kernel) + tf.nn.l2_loss(model.layers[2].gamma)
+  correct_l2_reg = (
+      tf.nn.l2_loss(model.layers[1].kernel)
+      + tf.nn.l2_loss(1.0 - model.layers[2].gamma))
   l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
   assert np.array_equal(l2_reg_val, correct_l2_reg_val)
 
@@ -1821,7 +1825,7 @@ def test_compute_l2_reg_loss():
   l2_reg = compute_l2_reg_loss(model, reg_biases=True)
   correct_l2_reg = (
       tf.nn.l2_loss(model.layers[1].kernel) + tf.nn.l2_loss(model.layers[1].bias)
-      + tf.nn.l2_loss(model.layers[2].gamma) + tf.nn.l2_loss(model.layers[2].beta)
+      + tf.nn.l2_loss(1.0 - model.layers[2].gamma) + tf.nn.l2_loss(model.layers[2].beta)
       + tf.nn.l2_loss(model.layers[3].kernel) + tf.nn.l2_loss(model.layers[3].bias))
   l2_reg_val, correct_l2_reg_val = sess.run([l2_reg, correct_l2_reg])
   assert np.array_equal(l2_reg_val, correct_l2_reg_val)
