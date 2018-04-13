@@ -185,14 +185,14 @@ def predict_mitoses_num_locations(model, model_name, threshold, ROI, tile_size=6
   if marginalization:
     # create tiles larger than the intended size so that we can perform random rotations and
     # random translations via cropping
-    d = 18  # TODO: keep this in sync with the training augmentation code
-    tiles = (element[0] for element in gen_patches(ROI, tile_indices, tile_size+2*d, rotations=0,
+    d = 72  # TODO: keep this in sync with the training augmentation code
+    tiles = (element[0] for element in gen_patches(ROI, tile_indices, tile_size+d, rotations=0,
         translations=0, max_shift=0, p=1))
 
     # create marginalization graph
     # NOTE: averaging over sigmoid outputs vs. logits may yield slightly different results, due
     # to numerical precision
-    prep_tile = tf.placeholder(tf.float32, shape=[tile_size+2*d, tile_size+2*d, tile_channel])
+    prep_tile = tf.placeholder(tf.float32, shape=[tile_size+d, tile_size+d, tile_channel])
     aug_tiles = create_augmented_batch(prep_tile, batch_size, tile_size)  # create aug batch
     norm_tiles = normalize(aug_tiles, model_name)  # normalize augmented tiles
     aug_preds = model(norm_tiles)  # make predictions on normalized and augmented batch

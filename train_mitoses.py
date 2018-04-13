@@ -242,6 +242,8 @@ def create_augmented_batch(image, batch_size, patch_size):
   """
   assert batch_size % 4 == 0 or batch_size == 1, "batch_size must be 1 or divisible by 4"
 
+  # TODO rewrite this function to just draw `batch_size` examples from the `augment` function
+
   def rots_batch(image):
     rot0 = image
     rot90 = tf.image.rot90(image)
@@ -251,7 +253,8 @@ def create_augmented_batch(image, batch_size, patch_size):
     return rots
 
   if batch_size >= 4:
-    images = rots_batch(image)
+    image_crop = tf.image.resize_image_with_crop_or_pad(image, patch_size, patch_size)
+    images = rots_batch(image_crop)
     for i in range(round(batch_size/4)-1):
       aug_image = augment(image, patch_size, i)
       aug_image_rots = rots_batch(aug_image)
@@ -326,6 +329,8 @@ def process_dataset(dataset, model_name, patch_size, augmentation, marginalizati
         (tf.image.resize_image_with_crop_or_pad(image, patch_size, patch_size), label, filename),
         num_parallel_calls=threads)
 
+  # TODO: should this be in an `elif` block before the above `else` block?  in particular, the
+  # patch sizes will be messed up
   # marginalize (typically at eval time)
   if marginalization:
     dataset = dataset.map(lambda image, label, filename:
