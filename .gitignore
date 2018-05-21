@@ -1,4 +1,7 @@
 data
+docs/wsi-preprocessing-in-python/_site
 experiments
-*.zip
 model
+*.zip
+**/filters*.html
+**/tiles*.html
