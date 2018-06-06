@@ -1,0 +1,11 @@
+% Intro
+\section{Introduction}
+
+Breast cancer is the leading cause of cancerous death in women in less-developed countries, and is the second leading cause of cancerous deaths in developed countries, accounting for 29\% of all cancers in women within the U.S. \cite{siegel2018cancer,torre2015global}.  Increased survival rates have been attributed to early detection and improved treatment \cite{torre2015global}, giving incentive for pathologists and the medical world at large to develop improved methods for even earlier detection.
+%There are many forms of breast cancer including Ductal Carcinoma in Situ (DCIS), Invasive Ductal Carcinoma (IDC), Tubular Carcinoma of the Breast, Medullary Carcinoma of the Breast, Invasive Lobular Carcinoma, Inflammatory Breast Cancer and several others [3]. Within all of these forms of
+The rate at which cancer cells proliferate is a strong indicator of a breast cancer patient’s prognosis, and this measure is one of three components in the modified Bloom \& Richardson grading system for invasive breast cancer \cite{al2004prognostic}.  The most common technique for determining the proliferation speed is through mitotic count estimates, in which a pathologist counts the dividing cell nuclei in \gls{he}-stained slide preparations to determine the number of mitotic bodies per \gls{hpf}.
+%Given this, the pathologist produces a proliferation score of either 1, 2, or 3, ranging from better to worse prognosis [4].
+Unfortunately, this approach is known to have reproducibility problems due to subjectivity in counting \cite{veta2016mitosis}, giving rise to the need for improved, more objective approaches.
+
+Much recent work has been done on the task of automated mitosis detection and other related tasks \cite{Ciresan:2013hm, Paeng:2016vi, Lafarge:2017ud, Janowczyk:2016gv, Liu:2017uu, Ertosun:2015vo}. In this paper, we present a deep learning approach to the task of automated mitosis detection.  Our main contributions are the inclusion of color augmentation, minority class oversampling, noise marginalization at prediction time, a custom \gls{resnet} model, and a more efficient prediction algorithm.  Additionally, we have released the codebase\footnote{\url{https://github.com/CODAIT/deep-histopath}}.
+

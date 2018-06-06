@@ -1,0 +1,189 @@
+% Results
+\section{Experiments \& Results}
+
+%The following describes an abbreviated set of experiments and results leading to the best model, with a more detailed account of all experiments to follow at a later date.
+
+\paragraph{Datasets}
+The main mitosis detection dataset\footnote{\url{http://tupac.tue-image.nl/node/3}} contains 73 cases from three different pathology centers in the Netherlands.  Of the 73 cases, 23 of them are represented by regions of interest ranging in area from 7 mm\textsuperscript{2} to 58 mm\textsuperscript{2} (median 26 mm\textsuperscript{2}), each cut up into separate images that each represent a single \gls{hpf} of size $0.5 \times 0.5$ mm\textsuperscript{2}.  The other 50 cases are each represented by a single image region of size 2 mm\textsuperscript{2}.  All slides were stained with \gls{he}, and were scanned at 40x magnification with a spatial resolution of \SI{0.25}{\micro\meter/pixel}.  The images were exported in the TIFF format.  For each image, all mitotic figures present were annotated by recording coordinates corresponding to the center of each mitosis, and these annotations were saved in CSV files.  All annotations required the consensus of at least two pathologists.  An additional 34 cases with the same details as the latter 50 training cases are provided as a testing dataset on which to make final predictions.
+
+In our original preprocessed dataset, 80\% of the cases were placed in the training set, $l_\text{prep} = 135$ pixels, $s_\text{prep} = 4$ for the training set, $s_\text{prep} = 32$ for the validation set, $p = 0.001$ for the training set, and $p = 1$ for the validation set.  We set $d = 30$ pixels, which represents \SI{7.5}{\micro\meter}.  Table \ref{tab:data_orig} shows the number and types of patches found in our original preprocessed dataset.
+
+\begin{table}%[h]
+  \centering
+  \begin{tabular}{l | r | r}
+    & Training  & Validation \\
+    \hline
+    Mitoses     & 1206   & 346 \\
+    Non-mitoses & 189305 & 960444 \\
+  \end{tabular}
+  \caption{Numbers and types of patches in the original preprocessed dataset.}
+  \label{tab:data_orig}
+\end{table}
+
+We generated \gls{fp} cases for the training set cases using $s_\text{prep} = 8$ and all other settings mentioned previously.  In addition, we also generated \gls{fp} cases from the ICPR 2012\footnote{\url{http://ludo17.free.fr/mitos\_2012/dataset.html}} and ICPR 2014\footnote{\url{https://mitos-atypia-14.grand-challenge.org/dataset}} mitosis datasets, using $s_\text{prep} = 4$ for the former, and $s_\text{prep} = 32$ for the latter.  Table \ref{tab:data_fp} shows the number and types of patches in our \gls{fp}-oversampled dataset.
+
+\begin{table}%[h]
+  \centering
+  \begin{tabular}{l | r | r}
+    & Training  & Validation \\
+    \hline
+    Mitoses     & 3160   & 346 \\
+    Non-mitoses & 305316 & 960444 \\
+  \end{tabular}
+  \caption{Numbers and types of patches in the \gls{fp}-oversampled preprocessed dataset.}
+  \label{tab:data_fp}
+\end{table}
+
+
+\paragraph{Experiments}
+Table \ref{tab:hyp_orig} describes the hyperparameter search space and final values for training the first model on the original preprocessed dataset.  Table \ref{tab:hyp_fp} describes the hyperparameter search space and final values for training the second model on the \gls{fp}-oversampled preprocessed dataset.  Table \ref{tab:hyp_pred} describes the hyperparameter search space and final values for the full prediction task on the original validation dataset using the best model.
+
+\begin{table}%[h]
+  \centering
+  \begin{tabular}{l | l | l}
+    Hyperparameter    & Search Space                           & Best Values \\
+    \hline
+    $n_\text{train}$  & 32, 64, 128                            & 64 \\
+    $l_\text{train}$  & 64                                     & 64 \\
+    $\lambda$         & 0 -- $1\mathrm{e}{-2}$                 & $6.92\mathrm{e}{-3}$ \\
+    $e_1$             & 5                                      & 5 \\
+    $lr_1$            & $1\mathrm{e}{-5}$ -- $1\mathrm{e}{-2}$ & $4.74\mathrm{e}{-3}$ \\
+    $e_2$             & 10                                     & 10 \\
+    $lr_2$            & $1\mathrm{e}{-7}$ -- $1\mathrm{e}{-2}$ & $4.02\mathrm{e}{-3}$ \\
+    $\mu$             & 0.85 -- 0.95                           & 0.913 \\
+    oversample        & true, false                            & true
+  \end{tabular}
+  %\caption{Hyperparameter search space used during random grid search for training the first model on the original preprocessed dataset, as well as the ensuing best values. Comma-separated values indicate discrete options, while en-dashes indicate intervals.}
+  \caption{Hyperparameter search space and final values for training the first model on the original preprocessed dataset.  Comma-separated values indicate discrete options, while en-dashes indicate intervals.}
+  \label{tab:hyp_orig}
+\end{table}
+
+\begin{table}%[h]
+  \centering
+  \begin{tabular}{l | l | l}
+    Hyperparameter    & Search Space                            & Best Values \\
+    \hline
+    $n_\text{train}$  & 32, 64, 128                             & 128 \\
+    $l_\text{train}$  & 64                                      & 64 \\
+    $\lambda$         & $1\mathrm{e}{-7}$ -- $1\mathrm{e}{-4}$  & $2.51\mathrm{e}{-5}$ \\
+    $e$               & 100                                     & 100 \\
+    $lr$              & $1\mathrm{e}{-5}$ -- $1\mathrm{e}{-3}$  & $7.71\mathrm{e}{-4}$ \\
+    oversample        & true, false                             & true
+  \end{tabular}
+  %\caption{Hyperparameter search space used during random grid search for training the second model on the \gls{fp}-oversampled preprocessed dataset, as well as the ensuing best values. Comma-separated values indicate discrete options, while en-dashes indicate intervals.}
+  \caption{Hyperparameter search space and final values for training the second model on the \gls{fp}-oversampled preprocessed dataset.  Comma-separated values indicate discrete options, while en-dashes indicate intervals.}
+  \label{tab:hyp_fp}
+\end{table}
+
+\begin{table}%[h]
+  \centering
+  \begin{tabular}{l | l | l}
+    Hyperparameter    & Search Space & Best Values \\
+    \hline
+    $s_\text{pred}$   & 1, 16, 32    & 16 \\
+    marginalization   & true, false  & true \\
+    $n_\text{pred}$   & 128          & 128 \\
+    $t_1$             & 0.0 -- 1.0   & 0.4 \\
+    $t_2$             & 0.0 -- 1.0   & 0.59 \\
+    $\epsilon$        & 60           & 60 \\
+    $m$               & 1, 2, 3      & 2 \\
+  \end{tabular}
+  %\caption{Hyperparameter search space used during random grid search for prediction, as well as the ensuing best values. Comma-separated values indicate discrete options, while en-dashes indicate intervals.}
+  \caption{Hyperparameter search space and final values for making predictions on the original validation dataset. Comma-separated values indicate discrete options, while en-dashes indicate intervals.}
+  \label{tab:hyp_pred}
+\end{table}
+
+
+%\paragraph{Results}
+Tables \ref{tab:res_prep_orig}, \ref{tab:res_prep_fp_nomarg}, \ref{tab:res_prep_fp}, and \ref{tab:res_orig} describe the evaluation results on the original preprocessed dataset, \gls{fp}-oversampled dataset without marginalization, \gls{fp}-oversampled dataset with marginalization, and original dataset, respectively.  The results on the preprocessed datasets serve as a proxy to the final task of predicting mitosis locations for the original dataset given a full \gls{hpf} rather than a single patch.
+
+\begin{table}%[h]
+  \centering
+  \begin{tabular}{c | c | c}
+    Metric & Train & Validation \\
+    \hline
+    F1 & 0.9836 & 0.4078 \\
+    \gls{ppv} & 0.9815 & 0.07410 \\
+    Sensitivity & 0.9858 & 0.8873 \\
+  \end{tabular}
+  %\caption{Hyperparameter search space used during random grid search for prediction, as well as the ensuing best values. Comma-separated values indicate discrete options, while en-dashes indicate intervals.}
+  %\caption{Intermediate results of the first model on the original preprocessed datasets.}
+  \caption{Intermediate results on the original preprocessed dataset.}
+  \label{tab:res_prep_orig}
+\end{table}
+
+% f1 (@ 0.5): 0.4788494110107422
+% f1_max (@ 0.9000000357627869): 0.6495177149772644
+% ppv: 0.3385167419910431
+% sens: 0.8179190754890442
+\begin{table}%[h]
+  \centering
+  \begin{tabular}{c | c | c}
+    Metric & Train & Validation \\
+    \hline
+    F1 & 0.9649 & 0.6495 \\
+    \gls{ppv} & 0.9571 & 0.3385 \\
+    Sensitivity & 0.9727 & 0.8179 \\
+  \end{tabular}
+  %\caption{Hyperparameter search space used during random grid search for prediction, as well as the ensuing best values. Comma-separated values indicate discrete options, while en-dashes indicate intervals.}
+  %\caption{Intermediate results of the second model on the \gls{fp}-oversampled preprocessed datasets without marginalization.}
+  \caption{Intermediate results on the \gls{fp}-oversampled preprocessed dataset without marginalization.  Note that this validation set is equivalent to the original preprocessed validation set.}
+  \label{tab:res_prep_fp_nomarg}
+\end{table}
+
+\begin{table}%[h]
+  \centering
+  \begin{tabular}{c | c | c}
+    Metric & Train & Validation \\
+    \hline
+    F1 & - & 0.7194 \\
+    \gls{ppv} & - & 0.4177 \\
+    Sensitivity & - & 0.8584 \\
+  \end{tabular}
+  %\caption{Hyperparameter search space used during random grid search for prediction, as well as the ensuing best values. Comma-separated values indicate discrete options, while en-dashes indicate intervals.}
+  %\caption{Intermediate results of the second model on the \gls{fp}-oversampled preprocessed datasets with marginalization.}
+  \caption{Intermediate results on the \gls{fp}-oversampled preprocessed dataset with marginalization.  Due to computational complexity, only the validation set is evaluated.  Note that this validation set is equivalent to the original preprocessed validation set.}
+  \label{tab:res_prep_fp}
+\end{table}
+
+% TEST RESULTS
+% F1-SCORE
+% --------------------------------------------------------------------------------
+% Total number of detections = 166
+% Precision = 0.6084
+% Recall = 0.5941
+% F1 score = 0.6012
+\begin{table}%[h]
+  \centering
+  \begin{tabular}{c | c | c | >{\bfseries}c}
+    Metric & Train & Validation & \textnormal{Test} \\
+    \hline
+    F1 & - & 0.6041 & 0.6012 \\
+    \acrshort{ppv} & - & 0.6131 & 0.6084 \\
+    Sensitivity & - & 0.5954 & 0.5941 \\
+  %\begin{tabular}{c | c | c}
+  %  Metric & Validation & Test \\
+  %  \hline
+  %  F1 & 0.6041 & - \\
+  %  \acrshort{ppv} & 0.6131 & - \\
+  %  Sensitivity & 0.5954 & - \\
+  \end{tabular}
+  %\caption{Hyperparameter search space used during random grid search for prediction, as well as the ensuing best values. Comma-separated values indicate discrete options, while en-dashes indicate intervals.}
+  \caption{Final results for the full prediction task on the original dataset.}
+  \label{tab:res_orig}
+\end{table}
+
+%Experiments:
+%\begin{itemize}
+%  \item List ranges of parameters for hyperparameter search(es)
+%\end{itemize}
+%
+%Results:
+%\begin{itemize}
+%  \item List the details of the 3 raw datasets used, as well as the size of the preprocessed datasets.
+%  \item List the hyperparameters for the best performing model, including number of epochs.
+%  \item List results on the preprocessed training \& validation datasets.
+%  \item List the hyperparameters for the prediction algorithm.
+%  \item List results on the validation dataset for prediction.
+%\end{itemize}
+
