@@ -606,15 +606,15 @@ def predict_mitoses_cpu(sparkContext, model_path, model_name, input_dir, file_su
 
 def test_predict_mitoses_num_locations():
   #TODO: change the model file path
-  model_file = 'model/0.74172_f1_1.7319_loss_8_epoch_model.hdf5'
+  #model_file = 'model/0.74172_f1_1.7319_loss_8_epoch_model.hdf5'
   model_name = 'vgg'
-  #model_file = 'model/0.72938_f1_0.067459_loss_7_epoch_model.hdf5'
+  model_file = 'experiments/models/deep_histopath_model.hdf5'
   #model_name = 'resnet'
   marginalization = True
   threshold = 0
   tile_overlap = 0
   batch_size = 128
-  ROI = np.asarray(Image.open("data/test/1_11_01_1292_413_0_0_0.png"), dtype=np.int)
+  ROI = np.asarray(Image.open("data/mitoses/patches/val/mitosis/1_04_21_723_1803_0_0_0_7.png"), dtype=np.int)
 
   # the expected probability
   base_model = tf.keras.models.load_model(model_file  , compile=False)
@@ -629,3 +629,5 @@ def test_predict_mitoses_num_locations():
                                                     tile_size=64, tile_overlap=tile_overlap, tile_channel=3,
                                                     batch_size=batch_size, marginalization=marginalization)
   print(f"The predicted probability: {pred_result}")
+
+

@@ -95,8 +95,8 @@ def extract_patch(im, row, col, size):
   dims = np.ndim(im)
   assert dims >= 2, "image must be of shape (h, w, ...)"
   h, w = im.shape[0:2]
-  assert 0 <= row <= h, "row is outside of the image height"
-  assert 0 <= col <= w, "col is outside of the image width"
+  assert 0 <= row <= h, "row {} is outside of the image height {}".format(row, h)
+  assert 0 <= col <= w, "col {} is outside of the image width {}".format(col, w)
   #assert 1 < size <= min(h, w), "size must be >1 and within the bounds of the image"
 
   # (row, col) is the center, so compute upper and lower bounds of patch

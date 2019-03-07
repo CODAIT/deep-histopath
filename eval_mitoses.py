@@ -95,17 +95,19 @@ def evaluate(patches_path, patch_size, batch_size, model_path, model_name, prob_
       sess.run(metric_update_ops, feed_dict={tf.keras.backend.learning_phase(): 0})
 
       if log_interval > 0 and vi % log_interval == 0:
-        metrics = sess.run([f1, ppv, sens, acc, mean_loss])
-        f1_val, ppv_val, sens_val, acc_val, mean_loss_val = metrics
+        metrics = sess.run([f1, ppv, sens, acc, mean_loss, labels, probs])
+        f1_val, ppv_val, sens_val, acc_val, mean_loss_val, labels_val, probs_val = metrics
         print("val", vi, f1_val, ppv_val, sens_val, acc_val, mean_loss_val)
+        print(len(labels_val), labels_val)
+        print(len(probs_val), probs_val)
 
       vi += 1
     except tf.errors.OutOfRangeError:
       break
 
   # log average validation metrics
-  f1_val, f1_max_val, thresh_max_val, ppv_val, sens_val, acc_val, mean_loss_val = sess.run(
-      [f1, f1_max, thresh_max, ppv, sens, acc, mean_loss])
+  f1_val, f1_max_val, thresh_max_val, ppv_val, sens_val, acc_val, mean_loss_val, labels_val = sess.run(
+      [f1, f1_max, thresh_max, ppv, sens, acc, mean_loss, labels])
   print(f"f1 (@ {prob_threshold}): {f1_val}")
   print(f"f1_max (@ {thresh_max_val}): {f1_max_val}")
   print(f"ppv: {ppv_val}")

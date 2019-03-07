@@ -108,7 +108,7 @@ def add_mark(im, locations, shape=Shape.SQUARE, mark_color=(0, 255, 127, 200), h
     hasProb: bool value to tell if the input csv file has the
       probability column.
   """
-  init_radius = 96
+  init_radius = 32
   width = 8
 
   draw = ImageDraw.Draw(im, 'RGBA')

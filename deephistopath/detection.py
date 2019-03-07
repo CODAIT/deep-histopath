@@ -7,6 +7,7 @@ import pandas as pd
 from PIL import Image
 import tensorflow as tf
 from sklearn.cluster import DBSCAN
+import shutil
 
 from deephistopath.evaluation import list_files, get_file_id, get_locations_from_csv
 from deephistopath.evaluation import GROUND_TRUTH_FILE_ID_RE
@@ -81,7 +82,7 @@ def arr_2_csv(arr, csv_file, columns={'row', 'col', 'prob'}):
 
   tuple_2_csv(pred_tuples, csv_file, columns)
 
-def tuple_2_csv(tuple_list, csv_file, columns={'row', 'col', 'prob'}):
+def tuple_2_csv(tuple_list, csv_file, columns=['row', 'col', 'prob']):
   """Save a list of tuples to a csv file
 
   Args:
@@ -332,7 +333,13 @@ def cluster_prediction_result(pred_dir, eps, min_samples, hasHeader, isWeightedA
   """
   pred_files = list_files(pred_dir, "*.csv")
   pred_files = get_file_id(pred_files, GROUND_TRUTH_FILE_ID_RE)
+  clustered_dir = os.path.dirname(pred_dir + "/") + "_clustered/"
+  if os.path.exists(clustered_dir):
+    print(clustered_dir)
+    shutil.rmtree(clustered_dir)
+
   for k, pred_file in pred_files.items():
+    print(pred_file)
     pred_locations = get_locations_from_csv(pred_file, hasHeader=hasHeader, hasProb=True)
 
     pred_locations = [p for p in pred_locations if float(p[2]) > prob_threshold]
@@ -344,7 +351,6 @@ def cluster_prediction_result(pred_dir, eps, min_samples, hasHeader, isWeightedA
                                                    isWeightedAvg=isWeightedAvg)
 
       # save the prediction results
-      clustered_dir = os.path.dirname(pred_dir + "/") + "_clustered/"
       clustered_file_name = pred_file.replace(pred_dir, clustered_dir)
 
       tuple_2_csv(clustered_pred_locations, clustered_file_name, columns={'row', 'col', 'avg_prob'})

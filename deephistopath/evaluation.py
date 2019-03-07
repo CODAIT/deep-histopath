@@ -8,7 +8,8 @@ import re, os
 from PIL import Image
 from deephistopath.visualization import Shape, add_mark
 
-GROUND_TRUTH_FILE_ID_RE = "(\d+/\d+)[.csv|.tif|_mark.tif|_mask.tif]"
+GROUND_TRUTH_FILE_ID_RE = \
+  "(\d+/\d+|\d+-\d+)[.csv|/clustered_mitosis_locations.csv|.tif|_mark.tif|_mask.tif]"
 
 def prepare_f1_inputs(prediction, ground_truth, threshold=30, file_id=None):
   """ Prepare the input variables (TP, FP, and PN) for computing F1
